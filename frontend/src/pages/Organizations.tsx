@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { isValidInn, isValidOgrn, isValidKpp, isValidBik, isValidAccount } from "@/lib/checksums";
+import { VAT_MODE_LABELS, type VatMode } from "@/lib/vat-rates";
 import { DataTable, type Page } from "@/components/DataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,10 +26,18 @@ const ORG_TYPES = [
   { value: "ZAO", label: "ЗАО" }, { value: "OAO", label: "ОАО" }, { value: "IP", label: "ИП" },
 ] as const;
 const TAX_SYSTEMS = [
-  { value: "OSN", label: "ОСН" }, { value: "USN", label: "УСН (доходы−расходы)" },
-  { value: "USN_INCOME", label: "УСН (доходы)" }, { value: "PSN", label: "Патент" },
-  { value: "NPD", label: "НПД (самозанятые)" }, { value: "ENVD", label: "ЕНВД" },
+  { value: "OSN", label: "ОСН (общая)" },
+  { value: "USN", label: "УСН (доходы−расходы)" },
+  { value: "USN_INCOME", label: "УСН (доходы)" },
+  { value: "AUSN", label: "АУСН (автоматическая упрощёнка)" },
+  { value: "PSN", label: "Патент" },
+  { value: "NPD", label: "НПД (самозанятые)" },
+  { value: "ENVD", label: "ЕНВД (отменён)" },
 ] as const;
+
+const VAT_MODES: Array<{ value: VatMode; label: string; description: string }> = (
+  ["GENERAL", "USN_5", "USN_7", "EXEMPT"] as const
+).map((mode) => ({ value: mode, label: VAT_MODE_LABELS[mode].short, description: VAT_MODE_LABELS[mode].description }));
 
 interface BankAccount {
   id: string;
@@ -54,7 +63,7 @@ interface Organization {
   phone: string | null;
   legalAddress: string;
   actualAddress: string | null;
-  vatPayer: boolean;
+  vatMode: VatMode;
   taxSystem: string;
   isDefault: boolean;
   bankAccounts: BankAccount[];
@@ -75,8 +84,8 @@ const orgSchema = z.object({
   phone: z.string().optional().or(z.literal("")),
   legalAddress: z.string().min(1, "Юридический адрес обязателен"),
   actualAddress: z.string().optional().or(z.literal("")),
-  vatPayer: z.boolean(),
-  taxSystem: z.enum(["OSN", "USN", "USN_INCOME", "ENVD", "PSN", "NPD"]),
+  vatMode: z.enum(["EXEMPT", "USN_5", "USN_7", "GENERAL"]),
+  taxSystem: z.enum(["OSN", "USN", "USN_INCOME", "AUSN", "ENVD", "PSN", "NPD"]),
   isDefault: z.boolean(),
 });
 type OrgForm = z.infer<typeof orgSchema>;
@@ -86,7 +95,7 @@ function blankOrg(): OrgForm {
     type: "OOO", name: "", fullName: "", inn: "", kpp: "", ogrn: "",
     directorName: "", directorPosition: "", entrepreneurName: "", chiefAccountant: "",
     email: "", phone: "", legalAddress: "", actualAddress: "",
-    vatPayer: true, taxSystem: "OSN", isDefault: false,
+    vatMode: "GENERAL", taxSystem: "OSN", isDefault: false,
   };
 }
 
@@ -331,14 +340,27 @@ function OrgDialog({ organization, onClose, onSaved }: { organization: Organizat
             <Textarea {...form.register("actualAddress")} rows={2} />
           </FormField>
 
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" {...form.register("vatPayer")} /> Плательщик НДС
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" {...form.register("isDefault")} /> Основная организация
-            </label>
-          </div>
+          <FormField label="Режим НДС">
+            <Select value={form.watch("vatMode")} onValueChange={(v) => form.setValue("vatMode", v as OrgForm["vatMode"])}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {VAT_MODES.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    <div>
+                      <div>{m.label}</div>
+                      <div className="text-xs text-muted-foreground">{m.description}</div>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="text-xs text-muted-foreground mt-1">
+              С 2026 года УСН становится плательщиком НДС при доходе &gt; 20 млн ₽ (ФЗ № 425-ФЗ).
+            </div>
+          </FormField>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" {...form.register("isDefault")} /> Основная организация
+          </label>
 
           {!isNew ? (
             <>

@@ -81,7 +81,7 @@ model Organization {
   logo             String?                      // Путь к файлу логотипа
   stamp            String?                      // Путь к скану печати
   signature        String?                      // Путь к скану подписи руководителя
-  vatPayer         Boolean   @default(true)     // Плательщик НДС
+  vatMode          VatMode   @default(GENERAL)  // Режим НДС (реформа 2026: УСН тоже может быть плательщиком)
   taxSystem        TaxSystem @default(OSN)
   isDefault        Boolean   @default(false)    // Организация по умолчанию для новых документов
   createdAt        DateTime  @default(now())
@@ -169,7 +169,7 @@ model Nomenclature {
   unitMeasure String    @default("шт")          // Единица измерения (отображаемая)
   unitCode    String    @default("796")         // Код ОКЕИ (796 = штука)
   type        NomenType @default(TOVAR)
-  vatRate     Decimal   @db.Decimal(5, 2) @default(20.00)
+  vatRate     Decimal   @db.Decimal(5, 2) @default(22.00)
   price       Decimal?  @db.Decimal(15, 2)
   isActive    Boolean   @default(true)
   description String?
@@ -241,7 +241,7 @@ model Invoice {
   subtotal       Decimal       @db.Decimal(15, 2) @default(0)   // Без НДС
   vatAmount      Decimal       @db.Decimal(15, 2) @default(0)   // НДС
   total          Decimal       @db.Decimal(15, 2) @default(0)   // Итого с НДС
-  vatRate        Decimal       @db.Decimal(5, 2)  @default(20.00)
+  vatRate        Decimal       @db.Decimal(5, 2)  @default(22.00)
   vatIncluded    Boolean       @default(true)                    // НДС включён в цену или сверху
   paymentPurpose String?                                          // Назначение платежа
   notes          String?
@@ -285,7 +285,7 @@ model Act {
   subtotal        Decimal   @db.Decimal(15, 2) @default(0)
   vatAmount       Decimal   @db.Decimal(15, 2) @default(0)
   total           Decimal   @db.Decimal(15, 2) @default(0)
-  vatRate         Decimal   @db.Decimal(5, 2)  @default(20.00)
+  vatRate         Decimal   @db.Decimal(5, 2)  @default(22.00)
   vatIncluded     Boolean   @default(true)
   currency        String    @default("RUB")
   status          DocStatus @default(DRAFT)
@@ -328,7 +328,7 @@ model UpdDocument {
   subtotal        Decimal     @db.Decimal(15, 2) @default(0)
   vatAmount       Decimal     @db.Decimal(15, 2) @default(0)
   total           Decimal     @db.Decimal(15, 2) @default(0)
-  vatRate         Decimal     @db.Decimal(5, 2)  @default(20.00)
+  vatRate         Decimal     @db.Decimal(5, 2)  @default(22.00)
   vatIncluded     Boolean     @default(false)              // В счёте-фактуре НДС обычно сверху
   currency        String      @default("RUB")
   status          DocStatus   @default(DRAFT)
@@ -374,7 +374,7 @@ model Waybill {
   subtotal       Decimal   @db.Decimal(15, 2) @default(0)
   vatAmount      Decimal   @db.Decimal(15, 2) @default(0)
   total          Decimal   @db.Decimal(15, 2) @default(0)
-  vatRate        Decimal   @db.Decimal(5, 2)  @default(20.00)
+  vatRate        Decimal   @db.Decimal(5, 2)  @default(22.00)
   vatIncluded    Boolean   @default(true)
   currency       String    @default("RUB")
   status         DocStatus @default(DRAFT)
@@ -414,7 +414,7 @@ model DocumentItem {
   unitCode       String   @default("796")
   quantity       Decimal  @db.Decimal(15, 3) @default(1)
   price          Decimal  @db.Decimal(15, 2)              // Цена за единицу (без НДС если vatIncluded=false)
-  vatRate        Decimal  @db.Decimal(5, 2)  @default(20.00)
+  vatRate        Decimal  @db.Decimal(5, 2)  @default(22.00)
   subtotal       Decimal  @db.Decimal(15, 2)              // Сумма без НДС
   vatAmount      Decimal  @db.Decimal(15, 2)              // Сумма НДС
   total          Decimal  @db.Decimal(15, 2)              // Итого с НДС
@@ -488,9 +488,22 @@ enum TaxSystem {
   OSN          // Общая система налогообложения
   USN          // УСН доходы минус расходы
   USN_INCOME   // УСН доходы
+  AUSN         // Автоматизированная УСН (эксперимент 2022-2027; НДС не платится)
   ENVD         // ЕНВД (отменён, оставляем для совместимости)
   PSN          // Патентная система
   NPD          // Налог на профессиональный доход (самозанятые)
+}
+
+// Режим НДС (введён реформой 2026 — ФЗ от 28.11.2025 № 425-ФЗ):
+//  - EXEMPT  : освобождение от НДС (УСН до 20 млн руб., НПД, ПСН, АУСН)
+//  - USN_5   : УСН со ставкой НДС 5% (доход 20-250 млн, без права вычета)
+//  - USN_7   : УСН со ставкой НДС 7% (доход 250-490,5 млн, без права вычета)
+//  - GENERAL : общий режим (ОСН + УСН выбравшая 22%/10%/0%, с правом вычета)
+enum VatMode {
+  EXEMPT
+  USN_5
+  USN_7
+  GENERAL
 }
 
 enum NomenType {

@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Trash2, Edit, FileSignature } from "lucide-react";
+import { Plus, Trash2, Edit, FileSignature, Receipt } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -150,6 +151,7 @@ export function ContractsPage() {
 
 function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | null; onClose: () => void; onSaved: () => void }) {
   const isNew = !contract;
+  const navigate = useNavigate();
   const orgs = useQuery({ queryKey: ["orgs-opts"], queryFn: async () => (await api.get<Page<OrgOpt>>("/organizations", { params: { pageSize: 200 } })).data.items });
   const cps = useQuery({ queryKey: ["cps-opts"], queryFn: async () => (await api.get<Page<CpOpt>>("/counterparties", { params: { pageSize: 200 } })).data.items });
 
@@ -249,7 +251,17 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
             <input type="checkbox" {...form.register("autoRenew")} /> Автопролонгация
           </label>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {!isNew ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => navigate(`/invoices/new?fromContract=${contract!.id}`)}
+              >
+                <Receipt className="h-4 w-4" /> Создать счёт
+              </Button>
+            ) : null}
+            <div className="flex-1" />
             <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
             <Button type="submit" disabled={form.formState.isSubmitting}>
               {form.formState.isSubmitting ? "Сохранение..." : "Сохранить"}

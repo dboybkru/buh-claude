@@ -12,7 +12,8 @@ import {
 } from "../lib/validators.js";
 
 const orgTypeEnum = z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]);
-const taxSystemEnum = z.enum(["OSN", "USN", "USN_INCOME", "ENVD", "PSN", "NPD"]);
+const taxSystemEnum = z.enum(["OSN", "USN", "USN_INCOME", "AUSN", "ENVD", "PSN", "NPD"]);
+const vatModeEnum = z.enum(["EXEMPT", "USN_5", "USN_7", "GENERAL"]);
 
 const orgBaseShape = {
   type: orgTypeEnum,
@@ -35,7 +36,7 @@ const orgBaseShape = {
   logo: z.string().optional().nullable(),
   stamp: z.string().optional().nullable(),
   signature: z.string().optional().nullable(),
-  vatPayer: z.boolean().default(true),
+  vatMode: vatModeEnum.default("GENERAL"),
   taxSystem: taxSystemEnum.default("OSN"),
   isDefault: z.boolean().default(false),
 };

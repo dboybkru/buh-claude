@@ -18,7 +18,7 @@ export interface ItemRow {
 }
 
 export function blankItem(): ItemRow {
-  return { name: "", unit: "шт", unitCode: "796", quantity: "1", price: "0", vatRate: "20", subtotal: 0, vatAmount: 0, total: 0 };
+  return { name: "", unit: "шт", unitCode: "796", quantity: "1", price: "0", vatRate: "22", subtotal: 0, vatAmount: 0, total: 0 };
 }
 
 function recalc(row: ItemRow, vatIncluded: boolean): ItemRow {

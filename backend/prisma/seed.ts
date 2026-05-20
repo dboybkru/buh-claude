@@ -80,7 +80,7 @@ async function main() {
       email: "info@alfa.example",
       phone: "+7 (495) 123-45-67",
       legalAddress: "117997, г. Москва, ул. Вавилова, д. 19",
-      vatPayer: true,
+      vatMode: "GENERAL",
       taxSystem: "OSN",
       isDefault: true,
       bankAccounts: {
@@ -150,7 +150,7 @@ async function main() {
         unitMeasure: "ч",
         unitCode: "356",
         type: "USLUGA",
-        vatRate: 20,
+        vatRate: 22,
         price: 5000,
       },
       {
@@ -161,7 +161,7 @@ async function main() {
         unitMeasure: "шт",
         unitCode: "796",
         type: "RABOTA",
-        vatRate: 20,
+        vatRate: 22,
         price: 12000,
       },
       {
@@ -172,7 +172,7 @@ async function main() {
         unitMeasure: "шт",
         unitCode: "796",
         type: "TOVAR",
-        vatRate: 20,
+        vatRate: 22,
         price: 1500,
       },
       {
@@ -183,7 +183,7 @@ async function main() {
         unitMeasure: "пач",
         unitCode: "728",
         type: "TOVAR",
-        vatRate: 20,
+        vatRate: 22,
         price: 350,
       },
     ],
@@ -213,8 +213,8 @@ async function main() {
 
   // Счёт 1 — оплачен
   const invoiceItems1 = [
-    { name: "Консалтинговые услуги (январь)", unit: "ч", unitCode: "356", quantity: 10, price: 5000, vatRate: 20 },
-    { name: "Разработка квартальной отчётности", unit: "шт", unitCode: "796", quantity: 1, price: 12000, vatRate: 20 },
+    { name: "Консалтинговые услуги (январь)", unit: "ч", unitCode: "356", quantity: 10, price: 5000, vatRate: 22 },
+    { name: "Разработка квартальной отчётности", unit: "шт", unitCode: "796", quantity: 1, price: 12000, vatRate: 22 },
   ];
   const invoice1Calc = invoiceItems1.map((it) => ({ ...it, ...calcItem(it, true) }));
   const invoice1T = totals(invoice1Calc);
@@ -231,7 +231,7 @@ async function main() {
       currency: "RUB",
       status: "PAID",
       paidAt: new Date("2026-02-10"),
-      vatRate: 20,
+      vatRate: 22,
       vatIncluded: true,
       subtotal: invoice1T.subtotal,
       vatAmount: invoice1T.vatAmount,
@@ -258,7 +258,7 @@ async function main() {
 
   // Счёт 2 — выставлен, не оплачен
   const invoiceItems2 = [
-    { name: "Консалтинговые услуги (февраль)", unit: "ч", unitCode: "356", quantity: 15, price: 5000, vatRate: 20 },
+    { name: "Консалтинговые услуги (февраль)", unit: "ч", unitCode: "356", quantity: 15, price: 5000, vatRate: 22 },
   ];
   const invoice2Calc = invoiceItems2.map((it) => ({ ...it, ...calcItem(it, true) }));
   const invoice2T = totals(invoice2Calc);
@@ -274,7 +274,7 @@ async function main() {
       dueDate: new Date("2026-03-15"),
       currency: "RUB",
       status: "SENT",
-      vatRate: 20,
+      vatRate: 22,
       vatIncluded: true,
       subtotal: invoice2T.subtotal,
       vatAmount: invoice2T.vatAmount,
@@ -316,7 +316,7 @@ async function main() {
       periodEnd: new Date("2026-01-31"),
       currency: "RUB",
       status: "SIGNED",
-      vatRate: 20,
+      vatRate: 22,
       vatIncluded: true,
       subtotal: actT.subtotal,
       vatAmount: actT.vatAmount,
@@ -344,8 +344,8 @@ async function main() {
 
   // УПД — отгрузка товаров ИП
   const updItems = [
-    { name: "Канцелярский набор", unit: "шт", unitCode: "796", quantity: 20, price: 1500, vatRate: 20 },
-    { name: "Бумага офисная А4", unit: "пач", unitCode: "728", quantity: 50, price: 350, vatRate: 20 },
+    { name: "Канцелярский набор", unit: "шт", unitCode: "796", quantity: 20, price: 1500, vatRate: 22 },
+    { name: "Бумага офисная А4", unit: "пач", unitCode: "728", quantity: 50, price: 350, vatRate: 22 },
   ];
   const updCalc = updItems.map((it) => ({ ...it, ...calcItem(it, false) }));
   const updT = totals(updCalc);
@@ -359,7 +359,7 @@ async function main() {
       functionType: "FULL",
       currency: "RUB",
       status: "SIGNED",
-      vatRate: 20,
+      vatRate: 22,
       vatIncluded: false,
       subtotal: updT.subtotal,
       vatAmount: updT.vatAmount,
@@ -389,8 +389,8 @@ async function main() {
 
   // ТОРГ-12 — отгрузка ООО Бета
   const wbItems = [
-    { name: "Канцелярский набор", unit: "шт", unitCode: "796", quantity: 5, price: 1500, vatRate: 20 },
-    { name: "Бумага офисная А4", unit: "пач", unitCode: "728", quantity: 10, price: 350, vatRate: 20 },
+    { name: "Канцелярский набор", unit: "шт", unitCode: "796", quantity: 5, price: 1500, vatRate: 22 },
+    { name: "Бумага офисная А4", unit: "пач", unitCode: "728", quantity: 10, price: 350, vatRate: 22 },
   ];
   const wbCalc = wbItems.map((it) => ({ ...it, ...calcItem(it, true) }));
   const wbT = totals(wbCalc);
@@ -404,7 +404,7 @@ async function main() {
       operationType: "SALE",
       currency: "RUB",
       status: "SIGNED",
-      vatRate: 20,
+      vatRate: 22,
       vatIncluded: true,
       subtotal: wbT.subtotal,
       vatAmount: wbT.vatAmount,

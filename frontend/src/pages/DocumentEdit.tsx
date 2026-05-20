@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, Eye, FileDown, Trash2 } from "lucide-react";
+import { ArrowLeft, Eye, FileCheck, FileDown, FileText, Receipt, Trash2, Truck } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
@@ -19,10 +19,24 @@ import { FormField } from "@/pages/Organizations";
 import { ItemsEditor, recalcAll, blankItem, type ItemRow } from "@/components/ItemsEditor";
 import { formatAmount } from "@/lib/format";
 import { DOCS, type DocKind, statusLabel, isLocked } from "@/lib/documents-config";
+import { availableVatRates, defaultVatRate, VAT_MODE_LABELS, type VatMode } from "@/lib/vat-rates";
 
-interface OrgOpt { id: string; name: string; inn: string; bankAccounts?: Array<{ id: string; bankName: string; bik: string; isDefault: boolean }> }
+interface OrgOpt { id: string; name: string; inn: string; vatMode: VatMode; bankAccounts?: Array<{ id: string; bankName: string; bik: string; isDefault: boolean }> }
 interface CpOpt { id: string; name: string; inn: string }
-interface ContractOpt { id: string; number: string; organizationId: string; counterpartyId: string }
+interface ContractOpt { id: string; number: string; organizationId: string; counterpartyId: string; date: string }
+
+interface SourceContract { id: string; number: string; organizationId: string; counterpartyId: string }
+interface SourceInvoiceItem { name: string; unit: string; unitCode: string; quantity: string; price: string; vatRate: string }
+interface SourceInvoice {
+  id: string;
+  number: string;
+  organizationId: string;
+  counterpartyId: string;
+  contractId: string | null;
+  vatRate: string;
+  vatIncluded: boolean;
+  items: SourceInvoiceItem[];
+}
 
 interface DocumentFull {
   id: string;
@@ -97,7 +111,7 @@ function initState(kind: DocKind): State {
   return {
     organizationId: "", counterpartyId: "", contractId: "", bankAccountId: "", invoiceId: "",
     number: "", date: new Date().toISOString().slice(0, 10),
-    status: "DRAFT", vatRate: "20", vatIncluded: DOCS[kind].defaultVatIncluded, notes: "",
+    status: "DRAFT", vatRate: "22", vatIncluded: DOCS[kind].defaultVatIncluded, notes: "",
     dueDate: "", paymentPurpose: "",
     periodStart: "", periodEnd: "", sellerSignatory: "", buyerSignatory: "",
     functionType: "FULL", shipmentDate: "", shipmentAddress: "", customsDecl: "", paymentDocRef: "",
@@ -111,6 +125,9 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
   const isNew = id === "new" || !id;
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const fromContractId = searchParams.get("fromContract");
+  const fromInvoiceId = searchParams.get("fromInvoice");
 
   const orgs = useQuery({ queryKey: ["orgs-opts"], queryFn: async () => (await api.get<{ items: OrgOpt[] }>("/organizations", { params: { pageSize: 200 } })).data.items });
   const cps = useQuery({ queryKey: ["cps-opts"], queryFn: async () => (await api.get<{ items: CpOpt[] }>("/counterparties", { params: { pageSize: 200 } })).data.items });
@@ -122,9 +139,62 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
     enabled: !isNew,
   });
 
+  // Pre-fill для нового документа: ?fromContract=ID или ?fromInvoice=ID
+  const sourceContract = useQuery({
+    queryKey: ["contracts", fromContractId],
+    queryFn: async () => (await api.get<SourceContract>(`/contracts/${fromContractId}`)).data,
+    enabled: isNew && !!fromContractId,
+  });
+  const sourceInvoice = useQuery({
+    queryKey: ["invoices", fromInvoiceId, "as-source"],
+    queryFn: async () => (await api.get<SourceInvoice>(`/invoices/${fromInvoiceId}`)).data,
+    enabled: isNew && !!fromInvoiceId,
+  });
+
   const [state, setState] = useState<State>(() => initState(kind));
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Pre-fill из договора (новый счёт «На основании договора»)
+  useEffect(() => {
+    if (!isNew || !sourceContract.data) return;
+    const c = sourceContract.data;
+    setState((prev) => ({
+      ...prev,
+      organizationId: c.organizationId,
+      counterpartyId: c.counterpartyId,
+      contractId: c.id,
+    }));
+  }, [isNew, sourceContract.data]);
+
+  // Pre-fill из счёта (новый акт/УПД/ТОРГ-12 «На основании счёта»)
+  useEffect(() => {
+    if (!isNew || !sourceInvoice.data) return;
+    const inv = sourceInvoice.data;
+    setState((prev) => ({
+      ...prev,
+      organizationId: inv.organizationId,
+      counterpartyId: inv.counterpartyId,
+      contractId: inv.contractId ?? "",
+      invoiceId: inv.id,
+      vatRate: inv.vatRate,
+      vatIncluded: inv.vatIncluded,
+    }));
+    // Копируем позиции из счёта (без пересчёта — recalc сделает сам)
+    setItems(
+      inv.items.map((it) => ({
+        name: it.name,
+        unit: it.unit,
+        unitCode: it.unitCode,
+        quantity: it.quantity,
+        price: it.price,
+        vatRate: it.vatRate,
+        subtotal: 0,
+        vatAmount: 0,
+        total: 0,
+      })),
+    );
+  }, [isNew, sourceInvoice.data]);
 
   useEffect(() => {
     if (!isNew && existing.data) {
@@ -211,6 +281,20 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
 
   const orgOptions = orgs.data ?? [];
   const cpOptions = cps.data ?? [];
+  const selectedOrg = orgOptions.find((o) => o.id === state.organizationId);
+  const orgVatMode: VatMode = selectedOrg?.vatMode ?? "GENERAL";
+  const allowedVatRates = availableVatRates(orgVatMode);
+
+  // При смене организации с другим vatMode — переключаем ставку на дефолт нового режима
+  useEffect(() => {
+    if (!selectedOrg) return;
+    const current = parseFloat(state.vatRate);
+    const validValues = orgVatMode === "EXEMPT" ? [0] : allowedVatRates.map((r) => r.value);
+    if (!validValues.includes(current)) {
+      setField("vatRate", String(defaultVatRate(orgVatMode)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrg?.id, orgVatMode]);
   const contractOptions = useMemo(() => {
     if (!contracts.data) return [];
     return contracts.data.filter((c) =>
@@ -236,7 +320,20 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
             ) : null}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          {!isNew && kind === "invoices" ? (
+            <>
+              <Button variant="secondary" onClick={() => navigate(`/acts/new?fromInvoice=${id}`)} aria-label="Создать акт на основании">
+                <FileCheck className="h-4 w-4" /> Акт
+              </Button>
+              <Button variant="secondary" onClick={() => navigate(`/upds/new?fromInvoice=${id}`)} aria-label="Создать УПД на основании">
+                <FileText className="h-4 w-4" /> УПД
+              </Button>
+              <Button variant="secondary" onClick={() => navigate(`/waybills/new?fromInvoice=${id}`)} aria-label="Создать ТОРГ-12 на основании">
+                <Truck className="h-4 w-4" /> ТОРГ-12
+              </Button>
+            </>
+          ) : null}
           {!isNew ? (
             <>
               <Button variant="outline" onClick={() => setPreviewOpen(true)} aria-label="Превью PDF">
@@ -253,6 +350,28 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
           <Button onClick={save} disabled={locked}>Сохранить</Button>
         </div>
       </div>
+
+      {/* Backlink: показываем "На основании ..." */}
+      {(state.invoiceId || (kind === "invoices" && state.contractId)) ? (
+        <Card>
+          <CardContent className="py-3 text-sm flex items-center gap-2 flex-wrap">
+            <Receipt className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground">На основании:</span>
+            {state.contractId ? (
+              <Badge variant="outline" className="cursor-pointer" onClick={() => navigate("/contracts")}>
+                Договор {contracts.data?.find((c) => c.id === state.contractId)?.number ?? "..."}
+              </Badge>
+            ) : null}
+            {state.invoiceId ? (
+              <Badge variant="outline">
+                <Link to={`/invoices/${state.invoiceId}`} className="hover:underline">
+                  Счёт {existing.data?.invoiceId ? "..." : ""}
+                </Link>
+              </Badge>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader><CardTitle className="text-base">Шапка документа</CardTitle></CardHeader>
@@ -292,7 +411,23 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
 
           <div className="grid grid-cols-3 gap-3">
             <FormField label="Ставка НДС, %">
-              <Input type="number" step="0.01" value={state.vatRate} onChange={(e) => setField("vatRate", e.target.value)} disabled={locked} />
+              {orgVatMode === "EXEMPT" ? (
+                <Input value="без НДС" disabled />
+              ) : (
+                <Select value={state.vatRate} onValueChange={(v) => setField("vatRate", v)} disabled={locked}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {allowedVatRates.map((r) => (
+                      <SelectItem key={r.value} value={String(r.value)}>{r.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {selectedOrg ? (
+                <div className="text-xs text-muted-foreground mt-1">
+                  Режим организации: {VAT_MODE_LABELS[orgVatMode].short}
+                </div>
+              ) : null}
             </FormField>
             <FormField label="НДС">
               <Select value={state.vatIncluded ? "in" : "out"} onValueChange={(v) => setField("vatIncluded", v === "in")} disabled={locked}>

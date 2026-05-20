@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { formatAmount, formatDate } from "@/lib/format";
 import { AlertCircle, Building2, Users, Package, FileSignature, Receipt, Wallet } from "lucide-react";
+import { VatCalculator } from "@/components/VatCalculator";
 
 interface DashboardData {
   counters: Record<string, number>;
@@ -142,6 +143,9 @@ export function DashboardPage() {
         <DocCounter label="УПД" value={data.counters.upds ?? 0} icon={Package} />
         <DocCounter label="ТОРГ-12" value={data.counters.waybills ?? 0} icon={Package} />
       </div>
+
+      {/* Калькулятор УСН-НДС (реформа 2026) */}
+      <VatCalculator />
     </div>
   );
 }
