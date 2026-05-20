@@ -17,6 +17,7 @@ import { PaymentsPage } from "@/pages/Payments";
 import { ReconciliationsPage } from "@/pages/Reconciliations";
 import { AiSettingsPage } from "@/pages/AiSettings";
 import { AiChatPage } from "@/pages/AiChat";
+import { ImportPage } from "@/pages/Import";
 import { Placeholder } from "@/pages/Placeholder";
 
 const queryClient = new QueryClient({
@@ -47,6 +48,8 @@ export function App() {
 
                 <Route path="/ai" element={<AiChatPage />} />
                 <Route path="/ai/settings" element={<AiSettingsPage />} />
+
+                <Route path="/import" element={<ImportPage />} />
 
                 <Route path="/invoices" element={<DocumentsListPage kind="invoices" />} />
                 <Route path="/invoices/:id" element={<DocumentEditPage kind="invoices" />} />
