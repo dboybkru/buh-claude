@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, FileDown, Trash2 } from "lucide-react";
+import { ArrowLeft, Eye, FileDown, Trash2 } from "lucide-react";
 
-import { api, getToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
+import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
+import { PdfPreviewDialog } from "@/components/PdfPreviewDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -122,6 +124,7 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
 
   const [state, setState] = useState<State>(() => initState(kind));
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     if (!isNew && existing.data) {
@@ -197,22 +200,13 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
     } catch (err) { handleApiError(err); }
   }
 
-  function downloadPdf() {
-    const url = `/api/v1${cfg.apiPath}/${id}/pdf`;
-    fetch(url, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const blob = await r.blob();
-        const cd = r.headers.get("content-disposition") ?? "";
-        const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
-        const filename = m ? decodeURIComponent(m[1]!) : `${kind}.pdf`;
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(link.href);
-      })
-      .catch((err) => handleApiError(err, "Не удалось скачать PDF"));
+  async function downloadPdf() {
+    try {
+      const { blob, filename } = await fetchAuthorizedBlob(`/api/v1${cfg.apiPath}/${id}/pdf`, `${kind}.pdf`);
+      triggerDownload(blob, filename);
+    } catch (err) {
+      handleApiError(err, "Не удалось скачать PDF");
+    }
   }
 
   const orgOptions = orgs.data ?? [];
@@ -245,8 +239,15 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
         <div className="flex gap-2">
           {!isNew ? (
             <>
-              <Button variant="outline" onClick={downloadPdf}><FileDown className="h-4 w-4" /> Скачать PDF</Button>
-              <Button variant="outline" onClick={deleteDoc} disabled={locked}><Trash2 className="h-4 w-4" /> Удалить</Button>
+              <Button variant="outline" onClick={() => setPreviewOpen(true)} aria-label="Превью PDF">
+                <Eye className="h-4 w-4" /> Превью
+              </Button>
+              <Button variant="outline" onClick={downloadPdf} aria-label="Скачать PDF">
+                <FileDown className="h-4 w-4" /> Скачать PDF
+              </Button>
+              <Button variant="outline" onClick={deleteDoc} disabled={locked} aria-label="Удалить документ">
+                <Trash2 className="h-4 w-4" /> Удалить
+              </Button>
             </>
           ) : null}
           <Button onClick={save} disabled={locked}>Сохранить</Button>
@@ -415,6 +416,16 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
           </FormField>
         </CardContent>
       </Card>
+
+      {!isNew ? (
+        <PdfPreviewDialog
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          url={`/api/v1${cfg.apiPath}/${id}/pdf`}
+          fallbackName={`${cfg.titleSingular}-${state.number}.pdf`}
+          title={`${cfg.titleSingular} ${state.number}`}
+        />
+      ) : null}
     </div>
   );
 }

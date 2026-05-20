@@ -2,13 +2,14 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, Edit, Building2 } from "lucide-react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
+import { isValidInn, isValidOgrn, isValidKpp, isValidBik, isValidAccount } from "@/lib/checksums";
 import { DataTable, type Page } from "@/components/DataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,22 +60,13 @@ interface Organization {
   bankAccounts: BankAccount[];
 }
 
-const bankSchema = z.object({
-  id: z.string().optional(),
-  bankName: z.string().min(1, "Укажите банк"),
-  bik: z.string().regex(/^04\d{7}$/, "БИК: 9 цифр, начинается с 04"),
-  account: z.string().regex(/^\d{20}$/, "Счёт — 20 цифр"),
-  corrAccount: z.string().regex(/^\d{20}$/, "Корр.счёт — 20 цифр"),
-  isDefault: z.boolean(),
-});
-
 const orgSchema = z.object({
   type: z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]),
   name: z.string().min(1, "Краткое наименование обязательно"),
   fullName: z.string().min(1, "Полное наименование обязательно"),
-  inn: z.string().regex(/^\d{10}(\d{2})?$/, "ИНН — 10 или 12 цифр"),
-  kpp: z.string().regex(/^\d{9}$/, "КПП — 9 цифр").optional().or(z.literal("")),
-  ogrn: z.string().regex(/^\d{13}(\d{2})?$/).optional().or(z.literal("")),
+  inn: z.string().refine(isValidInn, "ИНН: неверный формат или контрольная сумма"),
+  kpp: z.string().refine((v) => v === "" || isValidKpp(v), "КПП — 9 цифр").optional().or(z.literal("")),
+  ogrn: z.string().refine((v) => v === "" || isValidOgrn(v), "ОГРН: неверная контрольная сумма").optional().or(z.literal("")),
   directorName: z.string().optional().or(z.literal("")),
   directorPosition: z.string().optional().or(z.literal("")),
   entrepreneurName: z.string().optional().or(z.literal("")),
@@ -378,10 +370,10 @@ function BankAccountsEditor({ organizationId, accounts }: { organizationId: stri
   const refresh = () => qc.invalidateQueries({ queryKey: ["organizations"] });
 
   const baSchema = z.object({
-    bankName: z.string().min(1),
-    bik: z.string().regex(/^04\d{7}$/, "БИК: 9 цифр, начинается с 04"),
-    account: z.string().regex(/^\d{20}$/, "Счёт — 20 цифр"),
-    corrAccount: z.string().regex(/^\d{20}$/, "Корр.счёт — 20 цифр"),
+    bankName: z.string().min(1, "Укажите банк"),
+    bik: z.string().refine(isValidBik, "БИК: 9 цифр, начинается с 04"),
+    account: z.string().refine(isValidAccount, "Счёт — 20 цифр"),
+    corrAccount: z.string().refine(isValidAccount, "Корр.счёт — 20 цифр"),
     isDefault: z.boolean(),
   });
   type Ba = z.infer<typeof baSchema>;

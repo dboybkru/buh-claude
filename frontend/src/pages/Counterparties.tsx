@@ -9,6 +9,7 @@ import { z } from "zod";
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
+import { isValidInn, isValidKpp, isValidOgrn } from "@/lib/checksums";
 import { DataTable, type Page } from "@/components/DataTable";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
@@ -43,11 +44,11 @@ interface Counterparty {
 
 const cpSchema = z.object({
   type: z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]),
-  inn: z.string().regex(/^\d{10}(\d{2})?$/, "ИНН — 10 или 12 цифр"),
-  kpp: z.string().regex(/^\d{9}$/).optional().or(z.literal("")),
+  inn: z.string().refine(isValidInn, "ИНН: неверный формат или контрольная сумма"),
+  kpp: z.string().refine((v) => v === "" || isValidKpp(v), "КПП — 9 цифр").optional().or(z.literal("")),
   name: z.string().min(1, "Название обязательно"),
   fullName: z.string().optional().or(z.literal("")),
-  ogrn: z.string().regex(/^\d{13}(\d{2})?$/).optional().or(z.literal("")),
+  ogrn: z.string().refine((v) => v === "" || isValidOgrn(v), "ОГРН: неверная контрольная сумма").optional().or(z.literal("")),
   legalAddress: z.string().optional().or(z.literal("")),
   managementName: z.string().optional().or(z.literal("")),
   managementPos: z.string().optional().or(z.literal("")),

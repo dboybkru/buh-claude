@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, Download, FileText } from "lucide-react";
-import { api, getToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
+import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { DataTable, type Page } from "@/components/DataTable";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,7 @@ import { DOCS, type DocKind, statusLabel, statusVariant, isLocked } from "@/lib/
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface DocRow {
   id: string;
@@ -32,12 +34,20 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
 
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const dq = useDebouncedValue(q, 300);
 
   const list = useQuery({
-    queryKey: [kind, { page, q: dq }],
-    queryFn: async () =>
-      (await api.get<Page<DocRow>>(cfg.apiPath, { params: { page, pageSize: 20, q: dq || undefined } })).data,
+    queryKey: [kind, { page, q: dq, statusFilter }],
+    queryFn: async () => {
+      const r = await api.get<Page<DocRow>>(cfg.apiPath, {
+        params: { page, pageSize: 20, q: dq || undefined },
+      });
+      // Серверный фильтр по статусу пока не реализован — фильтруем на клиенте.
+      if (statusFilter === "all") return r.data;
+      const filtered = r.data.items.filter((d) => d.status === statusFilter);
+      return { ...r.data, items: filtered, total: filtered.length };
+    },
   });
 
   const remove = useMutation({
@@ -46,22 +56,13 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
     onError: (e) => handleApiError(e, "Не удалось удалить"),
   });
 
-  function downloadExport(ext: "csv" | "xlsx") {
-    const url = `/api/v1/export/${kind}.${ext}`;
-    fetch(url, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const blob = await r.blob();
-        const cd = r.headers.get("content-disposition") ?? "";
-        const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
-        const filename = m ? decodeURIComponent(m[1]!) : `${kind}.${ext}`;
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-      })
-      .catch((err) => handleApiError(err, "Не удалось скачать экспорт"));
+  async function downloadExport(ext: "csv" | "xlsx") {
+    try {
+      const { blob, filename } = await fetchAuthorizedBlob(`/api/v1/export/${kind}.${ext}`, `${kind}.${ext}`);
+      triggerDownload(blob, filename);
+    } catch (err) {
+      handleApiError(err, "Не удалось скачать экспорт");
+    }
   }
 
   return (
@@ -93,6 +94,19 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
         searchPlaceholder="Номер или контрагент"
         loading={list.isLoading}
         empty={`${cfg.titleSingular.toLowerCase()}ов пока нет. Создайте первый.`}
+        toolbar={
+          <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+            <SelectTrigger className="w-[180px]" aria-label="Фильтр по статусу">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все статусы</SelectItem>
+              {cfg.statuses.map((s) => (
+                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
         columns={[
           {
             key: "number",
