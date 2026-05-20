@@ -12,6 +12,9 @@ import { invoicesRoutes } from "./routes/invoices.js";
 import { actsRoutes } from "./routes/acts.js";
 import { updsRoutes } from "./routes/upds.js";
 import { waybillsRoutes } from "./routes/waybills.js";
+import { dadataRoutes } from "./routes/dadata.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
+import { exportRoutes } from "./routes/export.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -47,6 +50,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(actsRoutes, { prefix: "/api/v1/acts" });
   await app.register(updsRoutes, { prefix: "/api/v1/upds" });
   await app.register(waybillsRoutes, { prefix: "/api/v1/waybills" });
+  await app.register(dadataRoutes, { prefix: "/api/v1/dadata" });
+  await app.register(dashboardRoutes, { prefix: "/api/v1/dashboard" });
+  await app.register(exportRoutes, { prefix: "/api/v1/export" });
 
   return app;
 }
