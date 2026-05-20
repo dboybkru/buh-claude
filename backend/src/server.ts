@@ -8,6 +8,10 @@ import { counterpartiesRoutes } from "./routes/counterparties.js";
 import { nomenclatureRoutes } from "./routes/nomenclature.js";
 import { contractsRoutes } from "./routes/contracts.js";
 import { bankAccountsRoutes } from "./routes/bankAccounts.js";
+import { invoicesRoutes } from "./routes/invoices.js";
+import { actsRoutes } from "./routes/acts.js";
+import { updsRoutes } from "./routes/upds.js";
+import { waybillsRoutes } from "./routes/waybills.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -39,6 +43,10 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(nomenclatureRoutes, { prefix: "/api/v1/nomenclature" });
   await app.register(contractsRoutes, { prefix: "/api/v1/contracts" });
   await app.register(bankAccountsRoutes, { prefix: "/api/v1/organizations/:organizationId/bank-accounts" });
+  await app.register(invoicesRoutes, { prefix: "/api/v1/invoices" });
+  await app.register(actsRoutes, { prefix: "/api/v1/acts" });
+  await app.register(updsRoutes, { prefix: "/api/v1/upds" });
+  await app.register(waybillsRoutes, { prefix: "/api/v1/waybills" });
 
   return app;
 }

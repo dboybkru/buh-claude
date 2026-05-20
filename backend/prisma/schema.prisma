@@ -87,13 +87,14 @@ model Organization {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   bankAccounts BankAccount[]
   contracts    Contract[]
   invoices     Invoice[]
   acts         Act[]
   updDocuments UpdDocument[]
   waybills     Waybill[]
+  numbering    DocumentNumbering[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -439,6 +440,28 @@ model DocumentItem {
   @@index([actId])
   @@index([updId])
   @@index([waybillId])
+  @@index([userId])
+}
+
+// =============================================================================
+// DOCUMENT NUMBERING — счётчики автонумерации
+// Хранят последний выпущенный номер на (организация, тип документа, год).
+// Транзакционно инкрементируются при создании документа.
+// =============================================================================
+
+model DocumentNumbering {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  docType        DocType
+  year           Int                         // календарный год документа
+  lastNumber     Int      @default(0)        // последний выпущенный порядковый номер
+  prefix         String   @default("")       // префикс ("INV-", "АКТ-", …) — без номера и года
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId, docType, year])
   @@index([userId])
 }
 
