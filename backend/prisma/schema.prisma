@@ -1,0 +1,522 @@
+// BuhClaude — схема базы данных
+// Соответствие законодательству РФ: 402-ФЗ, НК РФ ст. 169, приказ ФНС ММВ-7-15/820@
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = []
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// USERS & SESSIONS
+// =============================================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  role         UserRole @default(USER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organizations  Organization[]
+  counterparties Counterparty[]
+  contracts      Contract[]
+  invoices       Invoice[]
+  acts           Act[]
+  updDocuments   UpdDocument[]
+  waybills       Waybill[]
+  nomenclature   Nomenclature[]
+  documentItems  DocumentItem[]
+  sessions       UserSession[]
+
+  @@index([email])
+}
+
+model UserSession {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+// =============================================================================
+// ORGANIZATIONS (наши собственные)
+// =============================================================================
+
+model Organization {
+  id               String    @id @default(uuid())
+  userId           String
+  type             OrgType
+  name             String                       // Краткое наименование (для отображения)
+  fullName         String                       // Полное наименование (для документов)
+  inn              String                       // ИНН: 10 (юрлицо) или 12 (ИП) цифр
+  kpp              String?                      // КПП: 9 цифр (отсутствует у ИП)
+  ogrn             String?                      // ОГРН: 13 (юрлицо) или 15 (ИП) цифр
+  okpo             String?
+  oktmo            String?
+  okveds           String[]                     // Коды ОКВЭД
+  directorName     String?                      // ФИО руководителя (ООО/АО)
+  directorPosition String?                      // Должность ("Генеральный директор" и т.п.)
+  entrepreneurName String?                      // ФИО предпринимателя (ИП)
+  chiefAccountant  String?                      // ФИО главного бухгалтера
+  email            String?
+  phone            String?
+  legalAddress     String                       // Юридический адрес
+  actualAddress    String?                      // Фактический адрес (если отличается)
+  logo             String?                      // Путь к файлу логотипа
+  stamp            String?                      // Путь к скану печати
+  signature        String?                      // Путь к скану подписи руководителя
+  vatPayer         Boolean   @default(true)     // Плательщик НДС
+  taxSystem        TaxSystem @default(OSN)
+  isDefault        Boolean   @default(false)    // Организация по умолчанию для новых документов
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankAccounts BankAccount[]
+  contracts    Contract[]
+  invoices     Invoice[]
+  acts         Act[]
+  updDocuments UpdDocument[]
+  waybills     Waybill[]
+
+  @@unique([userId, inn])
+  @@index([userId])
+}
+
+model BankAccount {
+  id             String  @id @default(uuid())
+  organizationId String
+  bankName       String                 // Наименование банка
+  bik            String                 // БИК: 9 цифр, начинается с 04
+  account        String                 // Расчётный счёт: 20 цифр
+  corrAccount    String                 // Корреспондентский счёт: 20 цифр
+  isDefault      Boolean @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+
+  @@index([organizationId])
+}
+
+// =============================================================================
+// COUNTERPARTIES (контрагенты)
+// =============================================================================
+
+model Counterparty {
+  id             String   @id @default(uuid())
+  userId         String
+  type           OrgType
+  inn            String
+  kpp            String?
+  name           String                    // Краткое наименование
+  fullName       String?                   // Полное наименование
+  ogrn           String?
+  okpo           String?
+  legalAddress   String?
+  actualAddress  String?
+  managementName String?                   // ФИО руководителя
+  managementPos  String?                   // Должность руководителя
+  email          String?
+  phone          String?
+  website        String?
+  bankAccounts   Json?                     // [{bik, account, corrAccount, bankName, isDefault}]
+  dadataRaw      Json?                     // Сырой ответ DaData (для аудита)
+  isActive       Boolean  @default(true)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contracts    Contract[]
+  invoices     Invoice[]
+  acts         Act[]
+  updDocuments UpdDocument[]
+  waybills     Waybill[]
+
+  @@unique([userId, inn])
+  @@index([userId])
+  @@index([inn])
+}
+
+// =============================================================================
+// NOMENCLATURE (справочник товаров/услуг/работ)
+// =============================================================================
+
+model Nomenclature {
+  id          String    @id @default(uuid())
+  userId      String
+  code        String                            // Артикул / внутренний код
+  name        String                            // Краткое наименование
+  fullName    String?                           // Полное наименование (для документов)
+  unitMeasure String    @default("шт")          // Единица измерения (отображаемая)
+  unitCode    String    @default("796")         // Код ОКЕИ (796 = штука)
+  type        NomenType @default(TOVAR)
+  vatRate     Decimal   @db.Decimal(5, 2) @default(20.00)
+  price       Decimal?  @db.Decimal(15, 2)
+  isActive    Boolean   @default(true)
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentItems DocumentItem[]
+
+  @@unique([userId, code])
+  @@index([userId])
+  @@index([name])
+}
+
+// =============================================================================
+// CONTRACTS (договоры)
+// =============================================================================
+
+model Contract {
+  id             String         @id @default(uuid())
+  userId         String
+  organizationId String
+  counterpartyId String
+  number         String
+  date           DateTime       @db.Date
+  expiryDate     DateTime?      @db.Date         // Дата окончания (если есть)
+  subject        String?                          // Предмет договора
+  amount         Decimal?       @db.Decimal(15, 2) // Сумма договора
+  currency       String         @default("RUB")
+  status         ContractStatus @default(ACTIVE)
+  autoRenew      Boolean        @default(false)   // Автопролонгация
+  description    String?
+  fileUrl        String?                          // Скан подписанного договора
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty  @relation(fields: [counterpartyId], references: [id])
+  invoices     Invoice[]
+  acts         Act[]
+  updDocuments UpdDocument[]
+  waybills     Waybill[]
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([counterpartyId])
+  @@index([expiryDate])
+}
+
+// =============================================================================
+// INVOICES (счета на оплату)
+// =============================================================================
+
+model Invoice {
+  id             String        @id @default(uuid())
+  userId         String
+  organizationId String
+  counterpartyId String
+  contractId     String?
+  bankAccountId  String?
+  number         String
+  date           DateTime      @db.Date
+  dueDate        DateTime?     @db.Date              // Срок оплаты
+  currency       String        @default("RUB")
+  status         InvoiceStatus @default(DRAFT)
+  // НДС и суммы (НК РФ ст. 169)
+  subtotal       Decimal       @db.Decimal(15, 2) @default(0)   // Без НДС
+  vatAmount      Decimal       @db.Decimal(15, 2) @default(0)   // НДС
+  total          Decimal       @db.Decimal(15, 2) @default(0)   // Итого с НДС
+  vatRate        Decimal       @db.Decimal(5, 2)  @default(20.00)
+  vatIncluded    Boolean       @default(true)                    // НДС включён в цену или сверху
+  paymentPurpose String?                                          // Назначение платежа
+  notes          String?
+  paidAt         DateTime?                                        // Дата фактической оплаты
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty   @relation(fields: [counterpartyId], references: [id])
+  contract     Contract?      @relation(fields: [contractId], references: [id])
+  bankAccount  BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  items        DocumentItem[]
+  acts         Act[]
+  updDocuments UpdDocument[]
+  waybills     Waybill[]
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+  @@index([counterpartyId])
+}
+
+// =============================================================================
+// ACTS (акты выполненных работ / оказанных услуг)
+// 402-ФЗ ст. 9 — первичный учётный документ
+// =============================================================================
+
+model Act {
+  id              String    @id @default(uuid())
+  userId          String
+  organizationId  String
+  counterpartyId  String
+  contractId      String?
+  invoiceId       String?
+  number          String
+  date            DateTime  @db.Date
+  periodStart     DateTime? @db.Date                  // Начало периода оказания услуг
+  periodEnd       DateTime? @db.Date                  // Окончание периода
+  subtotal        Decimal   @db.Decimal(15, 2) @default(0)
+  vatAmount       Decimal   @db.Decimal(15, 2) @default(0)
+  total           Decimal   @db.Decimal(15, 2) @default(0)
+  vatRate         Decimal   @db.Decimal(5, 2)  @default(20.00)
+  vatIncluded     Boolean   @default(true)
+  currency        String    @default("RUB")
+  status          DocStatus @default(DRAFT)
+  sellerSignatory String?                              // ФИО подписанта со стороны исполнителя
+  buyerSignatory  String?                              // ФИО подписанта со стороны заказчика
+  notes           String?
+  fileUrl         String?                              // Скан подписанного акта
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty   @relation(fields: [counterpartyId], references: [id])
+  contract     Contract?      @relation(fields: [contractId], references: [id])
+  invoice      Invoice?       @relation(fields: [invoiceId], references: [id])
+  items        DocumentItem[]
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+}
+
+// =============================================================================
+// UPD — УНИВЕРСАЛЬНЫЙ ПЕРЕДАТОЧНЫЙ ДОКУМЕНТ
+// Приказ ФНС России от 19.12.2018 № ММВ-7-15/820@
+// =============================================================================
+
+model UpdDocument {
+  id              String      @id @default(uuid())
+  userId          String
+  organizationId  String
+  counterpartyId  String
+  contractId      String?
+  invoiceId       String?
+  number          String
+  date            DateTime    @db.Date
+  // Функция: 1 (счёт-фактура + передаточный документ) или 2 (только передаточный)
+  functionType    UpdFunction @default(FULL)
+  subtotal        Decimal     @db.Decimal(15, 2) @default(0)
+  vatAmount       Decimal     @db.Decimal(15, 2) @default(0)
+  total           Decimal     @db.Decimal(15, 2) @default(0)
+  vatRate         Decimal     @db.Decimal(5, 2)  @default(20.00)
+  vatIncluded     Boolean     @default(false)              // В счёте-фактуре НДС обычно сверху
+  currency        String      @default("RUB")
+  status          DocStatus   @default(DRAFT)
+  // Обязательные реквизиты счёта-фактуры (НК РФ ст. 169)
+  shipmentDate    DateTime?   @db.Date                     // Дата отгрузки
+  shipmentAddress String?                                   // Адрес грузополучателя
+  customsDecl     String?                                   // Номер ГТД (для импорта)
+  paymentDocRef   String?                                   // К п/п (при предоплате)
+  sellerSignatory String?
+  buyerSignatory  String?
+  notes           String?
+  fileUrl         String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty   @relation(fields: [counterpartyId], references: [id])
+  contract     Contract?      @relation(fields: [contractId], references: [id])
+  invoice      Invoice?       @relation(fields: [invoiceId], references: [id])
+  items        DocumentItem[]
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+}
+
+// =============================================================================
+// WAYBILLS — товарные накладные ТОРГ-12 (ОКУД 0330212)
+// =============================================================================
+
+model Waybill {
+  id             String    @id @default(uuid())
+  userId         String
+  organizationId String
+  counterpartyId String
+  contractId     String?
+  invoiceId      String?
+  number         String
+  date           DateTime  @db.Date
+  operationType  WaybillOp @default(SALE)
+  subtotal       Decimal   @db.Decimal(15, 2) @default(0)
+  vatAmount      Decimal   @db.Decimal(15, 2) @default(0)
+  total          Decimal   @db.Decimal(15, 2) @default(0)
+  vatRate        Decimal   @db.Decimal(5, 2)  @default(20.00)
+  vatIncluded    Boolean   @default(true)
+  currency       String    @default("RUB")
+  status         DocStatus @default(DRAFT)
+  shippedBy      String?                            // ФИО + должность отпустившего
+  receivedBy     String?                            // ФИО + должность получившего
+  notes          String?
+  fileUrl        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty   @relation(fields: [counterpartyId], references: [id])
+  contract     Contract?      @relation(fields: [contractId], references: [id])
+  invoice      Invoice?       @relation(fields: [invoiceId], references: [id])
+  items        DocumentItem[]
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+}
+
+// =============================================================================
+// DOCUMENT ITEMS — позиции документов
+// Полиморфная связь через 4 nullable FK (Prisma-совместимый паттерн)
+// =============================================================================
+
+model DocumentItem {
+  id             String   @id @default(uuid())
+  userId         String
+  documentType   DocType                                  // Дискриминатор для приложения
+  nomenclatureId String?
+  sortOrder      Int      @default(1)
+  name           String                                    // Снапшот наименования на момент создания
+  unit           String   @default("шт")
+  unitCode       String   @default("796")
+  quantity       Decimal  @db.Decimal(15, 3) @default(1)
+  price          Decimal  @db.Decimal(15, 2)              // Цена за единицу (без НДС если vatIncluded=false)
+  vatRate        Decimal  @db.Decimal(5, 2)  @default(20.00)
+  subtotal       Decimal  @db.Decimal(15, 2)              // Сумма без НДС
+  vatAmount      Decimal  @db.Decimal(15, 2)              // Сумма НДС
+  total          Decimal  @db.Decimal(15, 2)              // Итого с НДС
+  countryCode    String?                                   // Код страны происхождения (для УПД)
+  countryName    String?                                   // Наименование страны
+  customsDecl    String?                                   // Номер ГТД (для УПД)
+  createdAt      DateTime @default(now())
+
+  // Полиморфные FK — заполняется ровно один в зависимости от documentType
+  invoiceId      String?
+  actId          String?
+  updId          String?
+  waybillId      String?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nomenclature Nomenclature? @relation(fields: [nomenclatureId], references: [id])
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  act          Act?          @relation(fields: [actId],     references: [id], onDelete: Cascade)
+  updDoc       UpdDocument?  @relation(fields: [updId],     references: [id], onDelete: Cascade)
+  waybill      Waybill?      @relation(fields: [waybillId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([actId])
+  @@index([updId])
+  @@index([waybillId])
+  @@index([userId])
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  USER
+  ACCOUNTANT
+  ADMIN
+}
+
+enum OrgType {
+  OOO   // Общество с ограниченной ответственностью
+  AO    // Акционерное общество
+  PAO   // Публичное АО
+  ZAO   // Закрытое АО
+  OAO   // Открытое АО
+  IP    // Индивидуальный предприниматель
+}
+
+enum TaxSystem {
+  OSN          // Общая система налогообложения
+  USN          // УСН доходы минус расходы
+  USN_INCOME   // УСН доходы
+  ENVD         // ЕНВД (отменён, оставляем для совместимости)
+  PSN          // Патентная система
+  NPD          // Налог на профессиональный доход (самозанятые)
+}
+
+enum NomenType {
+  TOVAR    // Товар
+  USLUGA   // Услуга
+  RABOTA   // Работа
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+  OVERDUE
+}
+
+enum DocStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  SIGNED
+  PAID
+  CANCELLED
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum DocType {
+  INVOICE
+  ACT
+  UPD
+  WAYBILL
+}
+
+enum UpdFunction {
+  FULL            // СЧФ + ДОП (счёт-фактура + передаточный документ), статус "1"
+  TRANSFER_ONLY   // Только передаточный документ, статус "2"
+}
+
+enum WaybillOp {
+  SALE       // Отгрузка покупателю
+  PURCHASE   // Приём от поставщика
+  RETURN     // Возврат
+  TRANSFER   // Внутреннее перемещение
+}
