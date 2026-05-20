@@ -7,6 +7,12 @@ import { AppShell } from "@/components/AppShell";
 import { LoginPage } from "@/pages/Login";
 import { RegisterPage } from "@/pages/Register";
 import { DashboardPage } from "@/pages/Dashboard";
+import { OrganizationsPage } from "@/pages/Organizations";
+import { CounterpartiesPage } from "@/pages/Counterparties";
+import { NomenclaturePage } from "@/pages/Nomenclature";
+import { ContractsPage } from "@/pages/Contracts";
+import { DocumentsListPage } from "@/pages/DocumentsList";
+import { DocumentEditPage } from "@/pages/DocumentEdit";
 import { Placeholder } from "@/pages/Placeholder";
 
 const queryClient = new QueryClient({
@@ -26,14 +32,20 @@ export function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<AppShell />}>
                 <Route path="/" element={<DashboardPage />} />
-                <Route path="/invoices" element={<Placeholder title="Счета" />} />
-                <Route path="/acts" element={<Placeholder title="Акты" />} />
-                <Route path="/upds" element={<Placeholder title="УПД" />} />
-                <Route path="/waybills" element={<Placeholder title="ТОРГ-12" />} />
-                <Route path="/organizations" element={<Placeholder title="Мои организации" />} />
-                <Route path="/counterparties" element={<Placeholder title="Контрагенты" />} />
-                <Route path="/nomenclature" element={<Placeholder title="Номенклатура" />} />
-                <Route path="/contracts" element={<Placeholder title="Договоры" />} />
+
+                <Route path="/organizations" element={<OrganizationsPage />} />
+                <Route path="/counterparties" element={<CounterpartiesPage />} />
+                <Route path="/nomenclature" element={<NomenclaturePage />} />
+                <Route path="/contracts" element={<ContractsPage />} />
+
+                <Route path="/invoices" element={<DocumentsListPage kind="invoices" />} />
+                <Route path="/invoices/:id" element={<DocumentEditPage kind="invoices" />} />
+                <Route path="/acts" element={<DocumentsListPage kind="acts" />} />
+                <Route path="/acts/:id" element={<DocumentEditPage kind="acts" />} />
+                <Route path="/upds" element={<DocumentsListPage kind="upds" />} />
+                <Route path="/upds/:id" element={<DocumentEditPage kind="upds" />} />
+                <Route path="/waybills" element={<DocumentsListPage kind="waybills" />} />
+                <Route path="/waybills/:id" element={<DocumentEditPage kind="waybills" />} />
               </Route>
             </Route>
             <Route path="*" element={<Placeholder title="404" description="Страница не найдена" />} />
