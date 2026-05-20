@@ -13,6 +13,8 @@ interface DashboardData {
   topCounterparties: Array<{ counterpartyId: string; name: string; inn: string; total: number; count: number }>;
   contracts: { expiringSoon: Array<{ id: string; number: string; expiryDate: string; counterparty: { name: string } }>; expired: Array<{ id: string; number: string; expiryDate: string; counterparty: { name: string } }> };
   overdueInvoices: Array<{ id: string; number: string; dueDate: string; total: string; counterparty: { name: string } }>;
+  topDebtors: Array<{ counterpartyId: string; name: string; inn: string; debt: number; invoices: number }>;
+  upcomingPayments: Array<{ id: string; number: string; dueDate: string; total: string; counterparty: { name: string } }>;
 }
 
 export function DashboardPage() {
@@ -134,6 +136,53 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Топ должников + Ближайшие платежи */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Топ должников</CardTitle>
+            <CardDescription>По сумме незакрытых счетов</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.topDebtors.length === 0 ? (
+              <div className="text-sm text-muted-foreground">Долгов нет — отлично!</div>
+            ) : (
+              data.topDebtors.map((d) => (
+                <div key={d.counterpartyId} className="flex items-center justify-between text-sm">
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate font-medium">{d.name}</div>
+                    <div className="text-xs text-muted-foreground">ИНН {d.inn} • {d.invoices} счёт.</div>
+                  </div>
+                  <div className="font-mono font-medium text-amber-700">{formatAmount(d.debt, { withCurrency: true })}</div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Ближайшие платежи</CardTitle>
+            <CardDescription>Срок оплаты в ближайшие 14 дней</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.upcomingPayments.length === 0 ? (
+              <div className="text-sm text-muted-foreground">Платежей в ближайшие 14 дней не запланировано</div>
+            ) : (
+              data.upcomingPayments.map((i) => (
+                <div key={i.id} className="flex items-center justify-between text-sm">
+                  <div>
+                    <div className="font-medium font-mono">{i.number}</div>
+                    <div className="text-xs text-muted-foreground">{i.counterparty.name} • до {formatDate(i.dueDate)}</div>
+                  </div>
+                  <div className="font-mono font-medium">{formatAmount(i.total, { withCurrency: true })}</div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Doc-type counters */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

@@ -47,9 +47,22 @@ export interface ApiError {
   statusCode?: number;
 }
 
+/**
+ * Парсит ответ API.
+ * Поддерживает оба формата:
+ *   { error: { code, message, details } }   — новый (единый формат)
+ *   { error: "Code", message, details }     — легаси (только для старого клиента)
+ */
 export function extractApiError(err: unknown): ApiError {
   if (err instanceof AxiosError && err.response?.data) {
-    return err.response.data as ApiError;
+    const data = err.response.data as Record<string, unknown>;
+    // Новый формат
+    if (data.error && typeof data.error === "object" && "code" in (data.error as object)) {
+      const e = data.error as { code: string; message?: string; details?: ApiError["details"] };
+      return { error: e.code, message: e.message, details: e.details };
+    }
+    // Легаси
+    return data as ApiError;
   }
   return { error: "UnknownError", message: err instanceof Error ? err.message : String(err) };
 }

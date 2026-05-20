@@ -15,6 +15,9 @@ import { waybillsRoutes } from "./routes/waybills.js";
 import { dadataRoutes } from "./routes/dadata.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { exportRoutes } from "./routes/export.js";
+import { paymentsRoutes } from "./routes/payments.js";
+import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
+import { ZodError } from "zod";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -30,6 +33,42 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: env.CORS_ORIGIN.split(",").map((s) => s.trim()),
     credentials: true,
+  });
+
+  // Единый формат ошибок: { error: { code, message, details? } }
+  app.setErrorHandler((err: unknown, request, reply) => {
+    if (err instanceof ApiError) {
+      return reply
+        .code(err.statusCode)
+        .send({ error: { code: err.code, message: err.message, details: err.details } });
+    }
+    if (err instanceof ZodError) {
+      return reply.code(400).send({
+        error: { code: "ValidationError", message: "Невалидные параметры запроса", details: err.flatten() },
+      });
+    }
+    const e = err as { statusCode?: number; code?: string; message?: string };
+    const status = e.statusCode ?? 500;
+    if (status >= 500) request.log.error({ err }, "Unhandled server error");
+    return reply.code(status).send({
+      error: {
+        code: e.code ?? (status >= 500 ? "InternalError" : "BadRequest"),
+        message: e.message || "Произошла ошибка",
+      },
+    });
+  });
+
+  // Конвертация легаси-формата плоских ошибок ({error, message, details}) в { error: { code, message, details } }
+  app.addHook("onSend", async (_request, reply, payload) => {
+    if (reply.statusCode < 400 || typeof payload !== "string") return payload;
+    try {
+      const parsed = JSON.parse(payload);
+      const normalized = normalizeErrorPayload(parsed);
+      if (normalized) return JSON.stringify(normalized);
+    } catch {
+      // не JSON — пропускаем (например, HTML/PDF/CSV ответы редко имеют ошибки на этом этапе)
+    }
+    return payload;
   });
 
   await app.register(jwtPlugin);
@@ -53,6 +92,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(dadataRoutes, { prefix: "/api/v1/dadata" });
   await app.register(dashboardRoutes, { prefix: "/api/v1/dashboard" });
   await app.register(exportRoutes, { prefix: "/api/v1/export" });
+  await app.register(paymentsRoutes, { prefix: "/api/v1/payments" });
 
   return app;
 }

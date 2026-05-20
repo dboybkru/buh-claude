@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Building2, Users, Package, FileSignature,
-  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon,
+  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,12 @@ const NAV: NavGroup[] = [
       { to: "/acts", label: "Акты", icon: FileCheck },
       { to: "/upds", label: "УПД", icon: FileText },
       { to: "/waybills", label: "ТОРГ-12", icon: Truck },
+    ],
+  },
+  {
+    title: "Финансы",
+    items: [
+      { to: "/payments", label: "Платежи", icon: Wallet },
     ],
   },
   {

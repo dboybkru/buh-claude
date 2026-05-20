@@ -20,6 +20,8 @@ import { ItemsEditor, recalcAll, blankItem, type ItemRow } from "@/components/It
 import { formatAmount } from "@/lib/format";
 import { DOCS, type DocKind, statusLabel, isLocked } from "@/lib/documents-config";
 import { availableVatRates, defaultVatRate, VAT_MODE_LABELS, type VatMode } from "@/lib/vat-rates";
+import { PaymentDialog } from "@/pages/Payments";
+import { Plus, Wallet } from "lucide-react";
 
 interface OrgOpt { id: string; name: string; inn: string; vatMode: VatMode; bankAccounts?: Array<{ id: string; bankName: string; bik: string; isDefault: boolean }> }
 interface CpOpt { id: string; name: string; inn: string }
@@ -154,6 +156,14 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
   const [state, setState] = useState<State>(() => initState(kind));
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+
+  // Платежи по счёту (только для invoices)
+  const paymentsByInvoice = useQuery({
+    queryKey: ["invoice-payments", id],
+    queryFn: async () => (await api.get<{ total: number; paid: number; balance: number; allocations: Array<{ id: string; amount: string; payment: { id: string; date: string; method: string; reference: string | null } }> }>(`/payments/by-invoice/${id}`)).data,
+    enabled: !isNew && kind === "invoices",
+  });
 
   // Pre-fill из договора (новый счёт «На основании договора»)
   useEffect(() => {
@@ -544,6 +554,53 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
         </CardContent>
       </Card>
 
+      {/* Платежи по счёту (только для invoices, существующий документ) */}
+      {!isNew && kind === "invoices" && paymentsByInvoice.data ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Wallet className="h-4 w-4" /> Платежи
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => setPaymentDialogOpen(true)} disabled={paymentsByInvoice.data.balance <= 0.005}>
+              <Plus className="h-4 w-4" /> Внести оплату
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-3 mb-4 text-sm">
+              <div>
+                <div className="text-muted-foreground">Сумма счёта</div>
+                <div className="font-mono font-medium">{formatAmount(paymentsByInvoice.data.total, { withCurrency: true })}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Оплачено</div>
+                <div className="font-mono font-medium text-emerald-700">{formatAmount(paymentsByInvoice.data.paid, { withCurrency: true })}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Остаток</div>
+                <div className={`font-mono font-medium ${paymentsByInvoice.data.balance > 0.005 ? "text-amber-700" : "text-emerald-700"}`}>
+                  {formatAmount(paymentsByInvoice.data.balance, { withCurrency: true })}
+                </div>
+              </div>
+            </div>
+            {paymentsByInvoice.data.allocations.length > 0 ? (
+              <div className="space-y-1 text-sm">
+                {paymentsByInvoice.data.allocations.map((a) => (
+                  <div key={a.id} className="flex justify-between border-b py-1 last:border-0">
+                    <div>
+                      <span className="text-muted-foreground">{a.payment.date.slice(0, 10)}</span>
+                      <span className="ml-2">{a.payment.reference ?? "—"}</span>
+                    </div>
+                    <span className="font-mono">{formatAmount(a.amount)} ₽</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">Платежей по этому счёту пока нет.</div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardContent className="pt-6">
           <FormField label="Примечания">
@@ -551,6 +608,20 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
           </FormField>
         </CardContent>
       </Card>
+
+      {!isNew && kind === "invoices" && paymentDialogOpen ? (
+        <PaymentDialog
+          payment={null}
+          presetInvoiceId={id}
+          onClose={() => setPaymentDialogOpen(false)}
+          onSaved={() => {
+            setPaymentDialogOpen(false);
+            qc.invalidateQueries({ queryKey: ["invoice-payments", id] });
+            qc.invalidateQueries({ queryKey: [kind, id] });
+            qc.invalidateQueries({ queryKey: [kind] });
+          }}
+        />
+      ) : null}
 
       {!isNew ? (
         <PdfPreviewDialog

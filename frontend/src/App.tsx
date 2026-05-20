@@ -13,6 +13,7 @@ import { NomenclaturePage } from "@/pages/Nomenclature";
 import { ContractsPage } from "@/pages/Contracts";
 import { DocumentsListPage } from "@/pages/DocumentsList";
 import { DocumentEditPage } from "@/pages/DocumentEdit";
+import { PaymentsPage } from "@/pages/Payments";
 import { Placeholder } from "@/pages/Placeholder";
 
 const queryClient = new QueryClient({
@@ -37,6 +38,8 @@ export function App() {
                 <Route path="/counterparties" element={<CounterpartiesPage />} />
                 <Route path="/nomenclature" element={<NomenclaturePage />} />
                 <Route path="/contracts" element={<ContractsPage />} />
+
+                <Route path="/payments" element={<PaymentsPage />} />
 
                 <Route path="/invoices" element={<DocumentsListPage kind="invoices" />} />
                 <Route path="/invoices/:id" element={<DocumentEditPage kind="invoices" />} />

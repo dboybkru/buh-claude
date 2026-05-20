@@ -127,6 +127,42 @@ export async function dashboardRoutes(app: FastifyInstance) {
       prisma.contract.count({ where: { userId } }),
     ]);
 
+    // 9. Топ должников (по сумме открытого долга по счетам)
+    const topDebtors = await prisma.$queryRaw<Array<{ counterpartyId: string; name: string; inn: string; debt: string | number; invoices: bigint }>>(Prisma.sql`
+      SELECT
+        i."counterpartyId"                                      AS "counterpartyId",
+        c.name                                                  AS name,
+        c.inn                                                   AS inn,
+        SUM(i.total - COALESCE(paid.amount, 0))                 AS debt,
+        COUNT(*)::bigint                                        AS invoices
+      FROM "Invoice" i
+      JOIN "Counterparty" c ON c.id = i."counterpartyId"
+      LEFT JOIN (
+        SELECT "invoiceId", SUM(amount) AS amount
+        FROM "PaymentAllocation"
+        GROUP BY "invoiceId"
+      ) paid ON paid."invoiceId" = i.id
+      WHERE i."userId" = ${userId}
+        AND i.status IN ('DRAFT', 'SENT', 'PARTIALLY_PAID', 'OVERDUE')
+        AND (i.total - COALESCE(paid.amount, 0)) > 0
+      GROUP BY i."counterpartyId", c.name, c.inn
+      ORDER BY debt DESC
+      LIMIT 5
+    `);
+
+    // 10. Ближайшие платежи (счета с dueDate в ближайшие 14 дней, не оплаченные)
+    const in14Days = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const upcomingPayments = await prisma.invoice.findMany({
+      where: {
+        userId,
+        status: { in: ["SENT", "PARTIALLY_PAID"] },
+        dueDate: { gte: now, lte: in14Days },
+      },
+      orderBy: { dueDate: "asc" },
+      include: { counterparty: { select: { id: true, name: true, inn: true } } },
+      take: 10,
+    });
+
     return {
       counters: {
         organizations: orgs,
@@ -164,6 +200,14 @@ export async function dashboardRoutes(app: FastifyInstance) {
         expired,
       },
       overdueInvoices,
+      topDebtors: topDebtors.map((d) => ({
+        counterpartyId: d.counterpartyId,
+        name: d.name,
+        inn: d.inn,
+        debt: toNumber(d.debt),
+        invoices: Number(d.invoices),
+      })),
+      upcomingPayments,
     };
   });
 }

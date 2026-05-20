@@ -35,6 +35,7 @@ model User {
   nomenclature   Nomenclature[]
   documentItems  DocumentItem[]
   sessions       UserSession[]
+  payments       Payment[]
 
   @@index([email])
 }
@@ -95,6 +96,7 @@ model Organization {
   updDocuments UpdDocument[]
   waybills     Waybill[]
   numbering    DocumentNumbering[]
+  payments     Payment[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -112,6 +114,7 @@ model BankAccount {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   invoices     Invoice[]
+  payments     Payment[]
 
   @@index([organizationId])
 }
@@ -150,6 +153,7 @@ model Counterparty {
   acts         Act[]
   updDocuments UpdDocument[]
   waybills     Waybill[]
+  payments     Payment[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -249,15 +253,16 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization   @relation(fields: [organizationId], references: [id])
-  counterparty Counterparty   @relation(fields: [counterpartyId], references: [id])
-  contract     Contract?      @relation(fields: [contractId], references: [id])
-  bankAccount  BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty        @relation(fields: [counterpartyId], references: [id])
+  contract     Contract?           @relation(fields: [contractId], references: [id])
+  bankAccount  BankAccount?        @relation(fields: [bankAccountId], references: [id])
   items        DocumentItem[]
   acts         Act[]
   updDocuments UpdDocument[]
   waybills     Waybill[]
+  allocations  PaymentAllocation[]
 
   @@unique([userId, number])
   @@index([userId])
@@ -441,6 +446,68 @@ model DocumentItem {
   @@index([updId])
   @@index([waybillId])
   @@index([userId])
+}
+
+// =============================================================================
+// PAYMENTS — оплаты и распределение по счетам
+// Один платёж может закрывать несколько счетов (allocations); один счёт может
+// быть закрыт несколькими платежами.
+// =============================================================================
+
+model Payment {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String                           // получатель платежа (наша организация)
+  counterpartyId String?                          // плательщик
+  bankAccountId  String?                          // на какой расч. счёт зачислен
+  date           DateTime @db.Date                // дата платежа
+  amount         Decimal  @db.Decimal(15, 2)      // сумма по выписке
+  direction      PaymentDirection @default(IN)    // IN — поступление, OUT — расход
+  method         PaymentMethod    @default(BANK)
+  purpose        String?                          // назначение платежа
+  reference      String?                          // № п/п, ссылка на банковский документ
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty?         @relation(fields: [counterpartyId], references: [id])
+  bankAccount  BankAccount?          @relation(fields: [bankAccountId], references: [id])
+  allocations  PaymentAllocation[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([counterpartyId])
+  @@index([date])
+}
+
+// Распределение одного платежа по нескольким счетам (или одного счёта между
+// несколькими платежами): allocation — одна "строчка распределения".
+model PaymentAllocation {
+  id        String  @id @default(uuid())
+  paymentId String
+  invoiceId String
+  amount    Decimal @db.Decimal(15, 2)
+  createdAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([invoiceId])
+}
+
+enum PaymentDirection {
+  IN    // поступление (от контрагента)
+  OUT   // расход (поставщику)
+}
+
+enum PaymentMethod {
+  BANK    // банковский перевод
+  CASH    // касса
+  CARD    // эквайринг
+  OTHER
 }
 
 // =============================================================================
