@@ -6,6 +6,11 @@ import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { nextDocumentNumber } from "../lib/numbering.js";
 import { itemInputSchema, prepareItems, itemCreateData } from "../lib/document-items.js";
 import { isDocStatusLocked } from "../lib/document-status.js";
+import { renderPdfStream } from "../pdf/render.js";
+import { UpdPdf } from "../pdf/templates/UpdPdf.js";
+import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { contentDispositionPdf } from "../pdf/filename.js";
+import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
 const functionEnum = z.enum(["FULL", "TRANSFER_ONLY"]);
@@ -205,5 +210,42 @@ export async function updsRoutes(app: FastifyInstance) {
     }
     await prisma.updDocument.delete({ where: { id } });
     return { ok: true };
+  });
+
+  app.get("/:id/pdf", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const upd = await prisma.updDocument.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!upd) return reply.code(404).send({ error: "NotFound" });
+
+    const stream = await renderPdfStream(
+      React.createElement(UpdPdf, {
+        number: upd.number,
+        date: upd.date,
+        functionType: upd.functionType,
+        subtotal: upd.subtotal,
+        vatAmount: upd.vatAmount,
+        total: upd.total,
+        seller: mapSeller(upd.organization),
+        buyer: mapBuyer(upd.counterparty),
+        items: mapItems(upd.items),
+        shipmentDate: upd.shipmentDate,
+        shipmentAddress: upd.shipmentAddress,
+        customsDecl: upd.customsDecl,
+        paymentDocRef: upd.paymentDocRef,
+        sellerSignatory: upd.sellerSignatory,
+        buyerSignatory: upd.buyerSignatory,
+        notes: upd.notes,
+      }),
+    );
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Content-Disposition", contentDispositionPdf(`УПД ${upd.number}`));
+    return reply.send(stream);
   });
 }

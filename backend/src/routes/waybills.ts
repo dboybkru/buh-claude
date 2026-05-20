@@ -6,6 +6,11 @@ import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { nextDocumentNumber } from "../lib/numbering.js";
 import { itemInputSchema, prepareItems, itemCreateData } from "../lib/document-items.js";
 import { isDocStatusLocked } from "../lib/document-status.js";
+import { renderPdfStream } from "../pdf/render.js";
+import { WaybillPdf } from "../pdf/templates/WaybillPdf.js";
+import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { contentDispositionPdf } from "../pdf/filename.js";
+import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
 const opEnum = z.enum(["SALE", "PURCHASE", "RETURN", "TRANSFER"]);
@@ -188,5 +193,38 @@ export async function waybillsRoutes(app: FastifyInstance) {
     }
     await prisma.waybill.delete({ where: { id } });
     return { ok: true };
+  });
+
+  app.get("/:id/pdf", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const wb = await prisma.waybill.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!wb) return reply.code(404).send({ error: "NotFound" });
+
+    const stream = await renderPdfStream(
+      React.createElement(WaybillPdf, {
+        number: wb.number,
+        date: wb.date,
+        operationType: wb.operationType,
+        subtotal: wb.subtotal,
+        vatAmount: wb.vatAmount,
+        total: wb.total,
+        seller: mapSeller(wb.organization),
+        buyer: mapBuyer(wb.counterparty),
+        items: mapItems(wb.items),
+        shippedBy: wb.shippedBy,
+        receivedBy: wb.receivedBy,
+        notes: wb.notes,
+      }),
+    );
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Content-Disposition", contentDispositionPdf(`ТОРГ-12 ${wb.number}`));
+    return reply.send(stream);
   });
 }

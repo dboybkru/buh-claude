@@ -6,6 +6,11 @@ import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { nextDocumentNumber } from "../lib/numbering.js";
 import { itemInputSchema, prepareItems, itemCreateData } from "../lib/document-items.js";
 import { isDocStatusLocked } from "../lib/document-status.js";
+import { renderPdfStream } from "../pdf/render.js";
+import { ActPdf } from "../pdf/templates/ActPdf.js";
+import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { contentDispositionPdf } from "../pdf/filename.js";
+import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -203,5 +208,39 @@ export async function actsRoutes(app: FastifyInstance) {
     }
     await prisma.act.delete({ where: { id } });
     return { ok: true };
+  });
+
+  app.get("/:id/pdf", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const act = await prisma.act.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!act) return reply.code(404).send({ error: "NotFound" });
+
+    const stream = await renderPdfStream(
+      React.createElement(ActPdf, {
+        number: act.number,
+        date: act.date,
+        periodStart: act.periodStart,
+        periodEnd: act.periodEnd,
+        subtotal: act.subtotal,
+        vatAmount: act.vatAmount,
+        total: act.total,
+        seller: mapSeller(act.organization),
+        buyer: mapBuyer(act.counterparty),
+        items: mapItems(act.items),
+        sellerSignatory: act.sellerSignatory,
+        buyerSignatory: act.buyerSignatory,
+        notes: act.notes,
+      }),
+    );
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Content-Disposition", contentDispositionPdf(`Акт ${act.number}`));
+    return reply.send(stream);
   });
 }

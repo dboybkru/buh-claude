@@ -6,6 +6,11 @@ import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { nextDocumentNumber } from "../lib/numbering.js";
 import { itemInputSchema, prepareItems, itemCreateData } from "../lib/document-items.js";
 import { isInvoiceStatusLocked } from "../lib/document-status.js";
+import { renderPdfStream } from "../pdf/render.js";
+import { InvoicePdf } from "../pdf/templates/InvoicePdf.js";
+import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { contentDispositionPdf } from "../pdf/filename.js";
+import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "PARTIALLY_PAID", "PAID", "CANCELLED", "OVERDUE"]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата должна быть в формате ГГГГ-ММ-ДД");
@@ -220,5 +225,39 @@ export async function invoicesRoutes(app: FastifyInstance) {
     }
     await prisma.invoice.delete({ where: { id } });
     return { ok: true };
+  });
+
+  app.get("/:id/pdf", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const inv = await prisma.invoice.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!inv) return reply.code(404).send({ error: "NotFound" });
+
+    const stream = await renderPdfStream(
+      React.createElement(InvoicePdf, {
+        number: inv.number,
+        date: inv.date,
+        dueDate: inv.dueDate,
+        paymentPurpose: inv.paymentPurpose,
+        notes: inv.notes,
+        subtotal: inv.subtotal,
+        vatAmount: inv.vatAmount,
+        total: inv.total,
+        seller: mapSeller(inv.organization, inv.bankAccountId),
+        buyer: mapBuyer(inv.counterparty),
+        items: mapItems(inv.items),
+        signatoryDirector: inv.organization.directorName,
+        signatoryAccountant: inv.organization.chiefAccountant,
+      }),
+    );
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Content-Disposition", contentDispositionPdf(`Счёт ${inv.number}`));
+    return reply.send(stream);
   });
 }
