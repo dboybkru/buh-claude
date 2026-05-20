@@ -15,6 +15,8 @@ import { DocumentsListPage } from "@/pages/DocumentsList";
 import { DocumentEditPage } from "@/pages/DocumentEdit";
 import { PaymentsPage } from "@/pages/Payments";
 import { ReconciliationsPage } from "@/pages/Reconciliations";
+import { AiSettingsPage } from "@/pages/AiSettings";
+import { AiChatPage } from "@/pages/AiChat";
 import { Placeholder } from "@/pages/Placeholder";
 
 const queryClient = new QueryClient({
@@ -42,6 +44,9 @@ export function App() {
 
                 <Route path="/payments" element={<PaymentsPage />} />
                 <Route path="/reconciliations" element={<ReconciliationsPage />} />
+
+                <Route path="/ai" element={<AiChatPage />} />
+                <Route path="/ai/settings" element={<AiSettingsPage />} />
 
                 <Route path="/invoices" element={<DocumentsListPage kind="invoices" />} />
                 <Route path="/invoices/:id" element={<DocumentEditPage kind="invoices" />} />

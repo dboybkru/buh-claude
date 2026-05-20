@@ -17,6 +17,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { exportRoutes } from "./routes/export.js";
 import { paymentsRoutes } from "./routes/payments.js";
 import { reconciliationsRoutes } from "./routes/reconciliations.js";
+import { aiRoutes } from "./routes/ai.js";
 import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
 import { ZodError } from "zod";
 
@@ -95,6 +96,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(exportRoutes, { prefix: "/api/v1/export" });
   await app.register(paymentsRoutes, { prefix: "/api/v1/payments" });
   await app.register(reconciliationsRoutes, { prefix: "/api/v1/reconciliations" });
+  await app.register(aiRoutes, { prefix: "/api/v1/ai" });
 
   return app;
 }

@@ -37,6 +37,7 @@ model User {
   sessions       UserSession[]
   payments       Payment[]
   reconciliations ReconciliationAct[]
+  aiSettings     AiSettings?
 
   @@index([email])
 }
@@ -491,6 +492,28 @@ enum ReconciliationStatus {
   SENT
   AGREED       // подписан обеими сторонами
   DISAGREED    // расхождения
+}
+
+// =============================================================================
+// AI ASSISTANT — настройки провайдера для одного пользователя
+// Поддерживаем OpenAI-compatible API: OpenAI, VseGPT, AITunnel, любой
+// endpoint с тем же контрактом /v1/chat/completions, /v1/models.
+// =============================================================================
+
+model AiSettings {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  provider    String   @default("openai")        // openai / vsegpt / aitunnel / custom
+  apiKey      String                              // зашифровано симметрично через env JWT_SECRET (см. lib/crypto)
+  baseUrl     String   @default("https://api.openai.com/v1")
+  model       String   @default("gpt-4o-mini")
+  temperature Float    @default(0.2)
+  maxTokens   Int      @default(2000)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // =============================================================================

@@ -62,7 +62,7 @@ export function extractApiError(err: unknown): ApiError {
       return { error: e.code, message: e.message, details: e.details };
     }
     // Легаси
-    return data as ApiError;
+    return data as unknown as ApiError;
   }
   return { error: "UnknownError", message: err instanceof Error ? err.message : String(err) };
 }
