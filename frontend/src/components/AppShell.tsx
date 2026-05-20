@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Building2, Users, Package, FileSignature,
-  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet,
+  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet, BookCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ const NAV: NavGroup[] = [
     title: "Финансы",
     items: [
       { to: "/payments", label: "Платежи", icon: Wallet },
+      { to: "/reconciliations", label: "Акты сверки", icon: BookCheck },
     ],
   },
   {

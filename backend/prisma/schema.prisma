@@ -36,6 +36,7 @@ model User {
   documentItems  DocumentItem[]
   sessions       UserSession[]
   payments       Payment[]
+  reconciliations ReconciliationAct[]
 
   @@index([email])
 }
@@ -97,6 +98,7 @@ model Organization {
   waybills     Waybill[]
   numbering    DocumentNumbering[]
   payments     Payment[]
+  reconciliations ReconciliationAct[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -154,6 +156,7 @@ model Counterparty {
   updDocuments UpdDocument[]
   waybills     Waybill[]
   payments     Payment[]
+  reconciliations ReconciliationAct[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -446,6 +449,48 @@ model DocumentItem {
   @@index([updId])
   @@index([waybillId])
   @@index([userId])
+}
+
+// =============================================================================
+// RECONCILIATION ACT — акт сверки взаимных расчётов с контрагентом
+// Сохраняется как "снимок" (frozen snapshot) с lines в JSON, чтобы при
+// последующих изменениях документов исторический акт оставался прежним.
+// =============================================================================
+
+model ReconciliationAct {
+  id              String   @id @default(uuid())
+  userId          String
+  organizationId  String
+  counterpartyId  String
+  number          String                                    // Свободный номер: "АС-2026-001" и т.п.
+  date            DateTime @db.Date                         // Дата составления
+  periodFrom      DateTime @db.Date
+  periodTo        DateTime @db.Date
+  openingBalance  Decimal  @db.Decimal(15, 2) @default(0)   // Положительное = долг контрагента
+  totalDebit      Decimal  @db.Decimal(15, 2) @default(0)   // Наши требования (счета/акты/УПД)
+  totalCredit     Decimal  @db.Decimal(15, 2) @default(0)   // Поступления (платежи)
+  closingBalance  Decimal  @db.Decimal(15, 2) @default(0)   // Сальдо на конец периода
+  lines           Json     @default("[]")                    // Снимок движений (см. ReconciliationLine в lib)
+  status          ReconciliationStatus @default(DRAFT)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty @relation(fields: [counterpartyId], references: [id])
+
+  @@unique([userId, number])
+  @@index([userId])
+  @@index([counterpartyId])
+  @@index([periodTo])
+}
+
+enum ReconciliationStatus {
+  DRAFT
+  SENT
+  AGREED       // подписан обеими сторонами
+  DISAGREED    // расхождения
 }
 
 // =============================================================================
