@@ -50,9 +50,11 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
+    const status = (request.query as { status?: string }).status;
     const userId = request.user.sub;
     const where: Prisma.UpdDocumentWhereInput = {
       userId,
+      ...(status && status !== "all" ? { status: status as Prisma.UpdDocumentWhereInput["status"] } : {}),
       ...(q.q ? { OR: [
         { number: { contains: q.q, mode: "insensitive" } },
         { counterparty: { name: { contains: q.q, mode: "insensitive" } } },

@@ -53,9 +53,11 @@ export async function invoicesRoutes(app: FastifyInstance) {
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
+    const status = (request.query as { status?: string }).status;
     const userId = request.user.sub;
     const where: Prisma.InvoiceWhereInput = {
       userId,
+      ...(status && status !== "all" ? { status: status as Prisma.InvoiceWhereInput["status"] } : {}),
       ...(q.q ? { OR: [
         { number: { contains: q.q, mode: "insensitive" } },
         { counterparty: { name: { contains: q.q, mode: "insensitive" } } },

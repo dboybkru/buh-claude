@@ -1,9 +1,10 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Building2, Users, Package, FileSignature,
-  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet, BookCheck, Bot, Upload,
+  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet, BookCheck, Bot, Upload, Moon, Sun,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -57,6 +58,7 @@ const NAV: NavGroup[] = [
 
 export function AppShell() {
   const { user, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -118,6 +120,11 @@ export function AppShell() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>{user?.email}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={toggle}>
+                {theme === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
+                {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />

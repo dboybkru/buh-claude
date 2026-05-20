@@ -39,15 +39,10 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
 
   const list = useQuery({
     queryKey: [kind, { page, q: dq, statusFilter }],
-    queryFn: async () => {
-      const r = await api.get<Page<DocRow>>(cfg.apiPath, {
-        params: { page, pageSize: 20, q: dq || undefined },
-      });
-      // Серверный фильтр по статусу пока не реализован — фильтруем на клиенте.
-      if (statusFilter === "all") return r.data;
-      const filtered = r.data.items.filter((d) => d.status === statusFilter);
-      return { ...r.data, items: filtered, total: filtered.length };
-    },
+    queryFn: async () =>
+      (await api.get<Page<DocRow>>(cfg.apiPath, {
+        params: { page, pageSize: 20, q: dq || undefined, status: statusFilter !== "all" ? statusFilter : undefined },
+      })).data,
   });
 
   const remove = useMutation({
