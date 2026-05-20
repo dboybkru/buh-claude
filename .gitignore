@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/cache/
+
+# Uploads (user content) — keep directory, ignore contents
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Prisma
+backend/prisma/migrations/dev.db*
+backend/prisma/dev.db*
+
+# PDF/CSV cache
+backend/tmp/
+backend/.cache/
+
+# Docker
+postgres_data/
+pgadmin_data/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+.parcel-cache/
+.turbo/
