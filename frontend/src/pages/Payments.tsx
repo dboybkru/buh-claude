@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,11 +79,14 @@ export function PaymentsPage() {
   const [q, setQ] = useState("");
   const dq = useDebouncedValue(q, 300);
   const [editing, setEditing] = useState<Payment | "new" | null>(null);
+  const [sort, setSort] = useUrlSort({ field: "date", dir: "desc" });
 
   const list = useQuery({
-    queryKey: ["payments", { page, q: dq }],
+    queryKey: ["payments", { page, q: dq, sort }],
     queryFn: async () =>
-      (await api.get<Page<Payment>>("/payments", { params: { page, pageSize: 20, q: dq || undefined } })).data,
+      (await api.get<Page<Payment>>("/payments", {
+        params: { page, pageSize: 20, q: dq || undefined, sort: sortQueryParam(sort) },
+      })).data,
   });
 
   const remove = useMutation({
@@ -114,11 +118,14 @@ export function PaymentsPage() {
         searchPlaceholder="Назначение, № п/п или контрагент"
         loading={list.isLoading}
         empty="Платежей пока нет. Нажмите «Внести платёж»."
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
           {
             key: "date",
             header: "Дата",
             width: "100px",
+            sortKey: "date",
             cell: (p) => <span className="text-sm">{formatDate(p.date)}</span>,
           },
           {
@@ -164,6 +171,7 @@ export function PaymentsPage() {
             header: "Сумма",
             width: "140px",
             align: "right",
+            sortKey: "amount",
             cell: (p) => (
               <span className={`font-mono font-medium ${p.direction === "IN" ? "text-emerald-700" : "text-red-700"}`}>
                 {p.direction === "IN" ? "+" : "−"} {formatAmount(p.amount)} ₽

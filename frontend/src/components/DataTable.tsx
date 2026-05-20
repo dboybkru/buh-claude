@@ -2,7 +2,8 @@ import { type ReactNode } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsUpDown, ArrowDown, ArrowUp, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export interface Column<T> {
   key: string;
@@ -10,6 +11,13 @@ export interface Column<T> {
   align?: "left" | "right" | "center";
   cell: (row: T) => ReactNode;
   width?: string;
+  /** Если задано — заголовок становится кликабельным и шлёт sortBy на сервер. */
+  sortKey?: string;
+}
+
+export interface SortState {
+  field: string;
+  dir: "asc" | "desc";
 }
 
 interface DataTableProps<T> {
@@ -27,6 +35,8 @@ interface DataTableProps<T> {
   loading?: boolean;
   empty?: ReactNode;
   toolbar?: ReactNode;
+  sort?: SortState | null;
+  onSortChange?: (next: SortState | null) => void;
 }
 
 export function DataTable<T>({
@@ -34,8 +44,20 @@ export function DataTable<T>({
   total, page = 1, pageSize = 20, onPageChange,
   search, onSearchChange, searchPlaceholder = "Поиск...",
   loading, empty = "Записей не найдено", toolbar,
+  sort, onSortChange,
 }: DataTableProps<T>) {
   const totalPages = total !== undefined ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+
+  function cycleSort(col: Column<T>) {
+    if (!col.sortKey || !onSortChange) return;
+    if (!sort || sort.field !== col.sortKey) {
+      onSortChange({ field: col.sortKey, dir: "asc" });
+    } else if (sort.dir === "asc") {
+      onSortChange({ field: col.sortKey, dir: "desc" });
+    } else {
+      onSortChange(null);   // третий клик — сброс
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -58,14 +80,30 @@ export function DataTable<T>({
         <Table>
           <TableHeader>
             <TableRow>
-              {columns.map((c) => (
-                <TableHead
-                  key={c.key}
-                  style={{ width: c.width, textAlign: c.align ?? "left" }}
-                >
-                  {c.header}
-                </TableHead>
-              ))}
+              {columns.map((c) => {
+                const active = sort?.field === c.sortKey;
+                const sortable = !!c.sortKey && !!onSortChange;
+                return (
+                  <TableHead
+                    key={c.key}
+                    style={{ width: c.width, textAlign: c.align ?? "left" }}
+                    aria-sort={active ? (sort?.dir === "asc" ? "ascending" : "descending") : undefined}
+                    className={cn(sortable && "cursor-pointer select-none hover:text-foreground")}
+                    onClick={sortable ? () => cycleSort(c) : undefined}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {c.header}
+                      {sortable ? (
+                        active ? (
+                          sort?.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                        )
+                      ) : null}
+                    </span>
+                  </TableHead>
+                );
+              })}
             </TableRow>
           </TableHeader>
           <TableBody>

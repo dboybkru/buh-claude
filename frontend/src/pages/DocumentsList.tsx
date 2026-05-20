@@ -8,6 +8,7 @@ import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatAmount, formatDate } from "@/lib/format";
@@ -36,12 +37,18 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const dq = useDebouncedValue(q, 300);
+  const [sort, setSort] = useUrlSort({ field: "date", dir: "desc" });
 
   const list = useQuery({
-    queryKey: [kind, { page, q: dq, statusFilter }],
+    queryKey: [kind, { page, q: dq, statusFilter, sort }],
     queryFn: async () =>
       (await api.get<Page<DocRow>>(cfg.apiPath, {
-        params: { page, pageSize: 20, q: dq || undefined, status: statusFilter !== "all" ? statusFilter : undefined },
+        params: {
+          page, pageSize: 20,
+          q: dq || undefined,
+          status: statusFilter !== "all" ? statusFilter : undefined,
+          sort: sortQueryParam(sort),
+        },
       })).data,
   });
 
@@ -102,10 +109,13 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
             </SelectContent>
           </Select>
         }
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
           {
             key: "number",
             header: "Номер / дата",
+            sortKey: "date",
             cell: (d) => (
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-muted-foreground" />
@@ -117,7 +127,7 @@ export function DocumentsListPage({ kind }: { kind: DocKind }) {
             ),
           },
           { key: "cp", header: "Контрагент", cell: (d) => <div><div>{d.counterparty?.name ?? "—"}</div><div className="text-xs text-muted-foreground">{d.counterparty?.inn ?? ""}</div></div> },
-          { key: "total", header: "Сумма", width: "140px", align: "right", cell: (d) => <span className="font-mono font-medium">{formatAmount(d.total, { withCurrency: true })}</span> },
+          { key: "total", header: "Сумма", width: "140px", align: "right", sortKey: "total", cell: (d) => <span className="font-mono font-medium">{formatAmount(d.total, { withCurrency: true })}</span> },
           { key: "status", header: "Статус", width: "140px", cell: (d) => <Badge variant={statusVariant(kind, d.status)}>{statusLabel(kind, d.status)}</Badge> },
           {
             key: "actions",

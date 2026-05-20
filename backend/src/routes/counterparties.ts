@@ -88,8 +88,29 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
   app.post("/", async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
+    const userId = request.user.sub;
+    const d = parsed.data;
+
+    // Запрет: контрагент не может совпадать с собственной организацией пользователя.
+    // Для юрлица сверяем (inn, kpp) — два юрлица с разными КПП считаются разными.
+    // Для ИП (тип IP) учитываем только inn.
+    const isIp = d.type === "IP";
+    const sameOrg = await prisma.organization.findFirst({
+      where: {
+        userId,
+        inn: d.inn,
+        ...(isIp ? {} : (d.kpp ? { kpp: d.kpp } : {})),
+      },
+    });
+    if (sameOrg) {
+      return reply.code(409).send({
+        error: "Conflict",
+        message: "Контрагент совпадает с вашей организацией. Нельзя добавить собственную организацию как контрагента.",
+      });
+    }
+
     try {
-      const data = { ...parsed.data, userId: request.user.sub } as Prisma.CounterpartyUncheckedCreateInput;
+      const data = { ...d, userId } as Prisma.CounterpartyUncheckedCreateInput;
       const created = await prisma.counterparty.create({ data });
       return reply.code(201).send(created);
     } catch (err) {

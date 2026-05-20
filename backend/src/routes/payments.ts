@@ -118,6 +118,10 @@ export async function paymentsRoutes(app: FastifyInstance) {
     if (data.invoiceId) {
       const inv = await prisma.invoice.findFirst({ where: { id: data.invoiceId, userId } });
       if (!inv) throw Errors.validation("Счёт не найден");
+      // OUT — расход, не оплата нашего счёта. Не позволяем такую связку.
+      if (data.direction === "OUT") throw Errors.validation("Исходящий платёж (OUT) не может закрывать счёт, выставленный нами");
+      // Счёт и платёж должны быть на одну организацию
+      if (inv.organizationId !== data.organizationId) throw Errors.validation("Счёт принадлежит другой организации");
     }
 
     const result = await prisma.$transaction(async (tx) => {

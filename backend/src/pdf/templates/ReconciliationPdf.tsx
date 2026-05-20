@@ -129,8 +129,11 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
           <Text style={[styles.small, { marginTop: 12 }]}>Примечание: {props.notes}</Text>
         ) : null}
 
+        {/* TODO[pdf]: символ → отсутствует в глифах PT Sans и отображается как замена.
+            Используем тире как промежуточное решение. Долгосрочно — заменить шрифт на NotoSans
+            с полной поддержкой Unicode или embed-нуть Material Symbols. */}
         <Text style={[styles.small, { marginTop: 12, color: "#666" }]}>
-          Сальдо положительное → задолженность контрагента. Сальдо отрицательное → переплата контрагента.
+          Сальдо положительное — задолженность контрагента. Сальдо отрицательное — переплата контрагента.
         </Text>
       </Page>
     </Document>
