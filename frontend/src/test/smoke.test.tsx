@@ -102,16 +102,19 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body.textContent).toMatch(/без вашего подтверждения|Загрузка/);
   });
 
-  it("AiChatPage (Sprint 6A+6B+6.1)", async () => {
+  it("AiChatPage (Sprint 6A+6B+6.1+6C)", async () => {
     const { AiChatPage } = await import("@/pages/AiChat");
     renderPage(<AiChatPage />);
     expect(screen.getByText("AI Ассистент")).toBeTruthy();
-    // Должны быть быстрые подсказки про все 5 поддерживаемых действий
+    // Все 7 поддерживаемых action types в quick-prompts
     expect(document.body.textContent).toMatch(/Создай контрагента/);
     expect(document.body.textContent).toMatch(/Создай счёт/);
     expect(document.body.textContent).toMatch(/Создай акт/);
     expect(document.body.textContent).toMatch(/Создай договор/);
     expect(document.body.textContent).toMatch(/Покажи должников/);
+    // Sprint 6C — платежи и распределение
+    expect(document.body.textContent).toMatch(/входящий платёж/);
+    expect(document.body.textContent).toMatch(/Распредели платёж/);
     // Sprint 6.1 — блок «История AI-действий» рендерится (даже пустой)
     expect(document.body.textContent).toMatch(/История AI-действий/);
   });

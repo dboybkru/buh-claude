@@ -85,6 +85,59 @@ export const analyzeDebtPayloadSchema = z.object({
 });
 export type AnalyzeDebtPayload = z.infer<typeof analyzeDebtPayloadSchema>;
 
+/* ---------- Sprint 6C payloads ---------- */
+
+export const paymentDirectionSchema = z.enum(["IN", "OUT"]);
+export const paymentMethodSchema = z.enum(["BANK", "CASH", "CARD", "OTHER"]);
+
+export const paymentAllocationPayloadSchema = z.object({
+  invoiceId: z.string().uuid(),
+  amount: z.number().positive(),
+});
+export type PaymentAllocationPayload = z.infer<typeof paymentAllocationPayloadSchema>;
+
+export const createPaymentPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  counterpartyId: z.string().uuid(),
+  bankAccountId: z.string().uuid().optional().nullable(),
+  date: dateString,
+  amount: z.number().positive(),
+  direction: paymentDirectionSchema,
+  method: paymentMethodSchema.optional().default("BANK"),
+  purpose: z.string().max(500).optional().nullable(),
+  reference: z.string().max(100).optional().nullable(),
+  allocations: z.array(paymentAllocationPayloadSchema).optional().nullable(),
+});
+export type CreatePaymentPayload = z.infer<typeof createPaymentPayloadSchema>;
+
+export const suggestPaymentAllocationsPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  counterpartyId: z.string().uuid(),
+  amount: z.number().positive(),
+  asOfDate: dateString.optional().nullable(),
+});
+export type SuggestPaymentAllocationsPayload = z.infer<typeof suggestPaymentAllocationsPayloadSchema>;
+
+/* ---------- payment suggestion result ---------- */
+
+export interface PaymentSuggestionAllocation {
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  invoiceBalance: number;
+  suggestedAmount: number;
+  reason: string;
+}
+
+export interface PaymentSuggestionResult {
+  amount: number;
+  allocatedAmount: number;
+  advanceAmount: number;
+  allocations: PaymentSuggestionAllocation[];
+  warnings: string[];
+  asOfDate: string;
+}
+
 /* ---------- analyze_debt result ---------- */
 
 export interface DebtAnalysisCounterparty {
@@ -133,6 +186,17 @@ export const actionSchema = z.discriminatedUnion("type", [
     type: z.literal("analyze_debt"),
     payload: analyzeDebtPayloadSchema,
   }),
+  // Sprint 6C
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("create_payment"),
+    payload: createPaymentPayloadSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("suggest_payment_allocations"),
+    payload: suggestPaymentAllocationsPayloadSchema,
+  }),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 export type ActionType = Action["type"];
@@ -143,10 +207,12 @@ export const ALLOWED_ACTION_TYPES: ActionType[] = [
   "create_act_from_invoice",
   "create_contract",
   "analyze_debt",
+  "create_payment",
+  "suggest_payment_allocations",
 ];
 
 /** Read-only actions — не создают бизнес-сущности, только возвращают данные. */
-export const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt"];
+export const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt", "suggest_payment_allocations"];
 
 export function isReadOnlyAction(t: ActionType): boolean {
   return READ_ONLY_ACTION_TYPES.includes(t);
@@ -162,17 +228,17 @@ export const actionPlanSchema = z.object({
 });
 export type ActionPlan = z.infer<typeof actionPlanSchema>;
 
-export type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis";
+export type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis" | "payment";
 
 /** Результат confirm — что применено, что пропущено, что упало. */
 export interface AppliedAction {
   id: string;
   actionType: ActionType;
   targetType: TargetType;
-  /** null для read-only actions (analyze_debt) — у них нет созданной сущности. */
+  /** null для read-only actions (analyze_debt / suggest_payment_allocations). */
   targetId: string | null;
-  /** Для analyze_debt — фактический результат анализа. Для других action остаётся undefined. */
-  result?: DebtAnalysisResult;
+  /** Для read-only actions — фактический результат: анализ долгов или предложение распределения. */
+  result?: DebtAnalysisResult | PaymentSuggestionResult;
 }
 
 export interface SkippedAction {

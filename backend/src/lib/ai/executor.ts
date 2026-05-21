@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { nextDocumentNumber } from "../numbering.js";
 import { prepareItems, itemCreateData } from "../document-items.js";
+import { createPaymentInTx, round2 } from "../payments-service.js";
 import {
   vatRateToNumber,
   type Action,
@@ -17,8 +18,12 @@ import {
   type CreateActFromInvoicePayload,
   type CreateContractPayload,
   type AnalyzeDebtPayload,
+  type CreatePaymentPayload,
+  type SuggestPaymentAllocationsPayload,
   type DebtAnalysisResult,
   type DebtAnalysisCounterparty,
+  type PaymentSuggestionResult,
+  type PaymentSuggestionAllocation,
 } from "./schemas.js";
 
 /** Контракт ошибки executor — содержит сообщение и кодируется как FailedAction. */
@@ -48,7 +53,7 @@ async function ensureCounterpartyOwner(userId: string, counterpartyId: string): 
 export interface ExecutorOutcome {
   targetType: TargetType;
   targetId: string | null;
-  result?: DebtAnalysisResult;
+  result?: DebtAnalysisResult | PaymentSuggestionResult;
 }
 
 /* ---------- create_counterparty ---------- */
@@ -386,6 +391,109 @@ async function executeAnalyzeDebt(userId: string, payload: AnalyzeDebtPayload): 
   return { targetType: "analysis", targetId: null, result };
 }
 
+/* ---------- Sprint 6C: create_payment ---------- */
+
+async function executeCreatePayment(
+  userId: string,
+  payload: CreatePaymentPayload,
+): Promise<ExecutorOutcome> {
+  // OUT не имеет allocations — проверка дублирует payments-service, но даёт более понятную ошибку для AI-flow
+  if (payload.direction === "OUT" && payload.allocations && payload.allocations.length > 0) {
+    throw new ExecutorError("Исходящий платёж (OUT) не может закрывать наши счета — allocations запрещены");
+  }
+
+  // Owner-checks делаются внутри createPaymentInTx (organization / counterparty / bankAccount).
+  // AI executor лишь оборачивает в транзакцию и передаёт payload как есть.
+  const created = await prisma.$transaction(async (tx) => {
+    return await createPaymentInTx(tx, userId, {
+      organizationId: payload.organizationId,
+      counterpartyId: payload.counterpartyId,
+      bankAccountId: payload.bankAccountId ?? null,
+      date: payload.date,
+      amount: payload.amount,
+      direction: payload.direction,
+      method: payload.method ?? "BANK",
+      purpose: payload.purpose ?? null,
+      reference: payload.reference ?? null,
+      allocations: payload.allocations ?? undefined,
+    });
+  });
+
+  return { targetType: "payment", targetId: created.id };
+}
+
+/* ---------- Sprint 6C: suggest_payment_allocations (read-only) ---------- */
+
+async function executeSuggestPaymentAllocations(
+  userId: string,
+  payload: SuggestPaymentAllocationsPayload,
+): Promise<ExecutorOutcome> {
+  await ensureOrganizationOwner(userId, payload.organizationId);
+  await ensureCounterpartyOwner(userId, payload.counterpartyId);
+
+  const asOfDate = payload.asOfDate ? new Date(payload.asOfDate) : new Date();
+
+  // Все неоплаченные счета этого контрагента + organization, отсортированные по dueDate, затем date.
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      userId,
+      organizationId: payload.organizationId,
+      counterpartyId: payload.counterpartyId,
+      status: { in: ["DRAFT", "SENT", "PARTIALLY_PAID", "OVERDUE"] },
+    },
+    include: { allocations: { select: { amount: true } } },
+    orderBy: [{ dueDate: "asc" }, { date: "asc" }],
+  });
+
+  let remaining = round2(payload.amount);
+  const allocations: PaymentSuggestionAllocation[] = [];
+  const warnings: string[] = [];
+
+  for (const inv of invoices) {
+    if (remaining <= 0.005) break;
+    const total = Number(inv.total);
+    const alreadyPaid = inv.allocations.reduce((s, a) => s + Number(a.amount), 0);
+    const balance = round2(total - alreadyPaid);
+    if (balance <= 0.005) continue;
+
+    const suggested = round2(Math.min(remaining, balance));
+    const isOverdue = inv.dueDate && inv.dueDate < asOfDate;
+    const reason = isOverdue
+      ? `Просрочен с ${inv.dueDate!.toISOString().slice(0, 10)} — приоритетное закрытие`
+      : "Старейший непогашенный счёт по дате";
+
+    allocations.push({
+      invoiceId: inv.id,
+      invoiceNumber: inv.number,
+      invoiceDate: inv.date.toISOString().slice(0, 10),
+      invoiceBalance: balance,
+      suggestedAmount: suggested,
+      reason,
+    });
+    remaining = round2(remaining - suggested);
+  }
+
+  const allocatedAmount = round2(allocations.reduce((s, a) => s + a.suggestedAmount, 0));
+  const advanceAmount = round2(payload.amount - allocatedAmount);
+
+  if (allocations.length === 0) {
+    warnings.push("У контрагента нет неоплаченных счетов — вся сумма попадёт в аванс.");
+  } else if (advanceAmount > 0.005) {
+    warnings.push(`Сумма платежа превышает долг на ${advanceAmount.toFixed(2)} ₽ — этот остаток будет авансом.`);
+  }
+
+  const result: PaymentSuggestionResult = {
+    amount: round2(payload.amount),
+    allocatedAmount,
+    advanceAmount,
+    allocations,
+    warnings,
+    asOfDate: asOfDate.toISOString().slice(0, 10),
+  };
+
+  return { targetType: "analysis", targetId: null, result };
+}
+
 /* ---------- public entry ---------- */
 
 /** Выполняет один action и возвращает результат либо ошибку. */
@@ -402,6 +510,10 @@ export async function executeAction(userId: string, action: Action): Promise<Exe
         return await executeCreateContract(userId, action.payload);
       case "analyze_debt":
         return await executeAnalyzeDebt(userId, action.payload);
+      case "create_payment":
+        return await executeCreatePayment(userId, action.payload);
+      case "suggest_payment_allocations":
+        return await executeSuggestPaymentAllocations(userId, action.payload);
     }
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {

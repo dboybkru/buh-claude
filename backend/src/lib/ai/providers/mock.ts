@@ -1,13 +1,15 @@
-// Sprint 6A + 6B: MockAIProvider — детерминированные ответы для dev/test без внешней сети.
+// Sprint 6A + 6B + 6C: MockAIProvider — детерминированные ответы для dev/test без внешней сети.
 // Поведение определяется ключевыми словами в последнем user-сообщении:
 //
-//   "создай контрагента"            → create_counterparty
-//   "создай счёт"                   → create_invoice
-//   "создай акт по счёту"           → create_act_from_invoice  (Sprint 6B)
-//   "создай договор"                → create_contract          (Sprint 6B)
-//   "покажи должников" / "анализ"   → analyze_debt             (Sprint 6B)
-//   "не хватает данных"             → план с missingFields, без actions
-//   иначе                           → информационный план без actions с warning
+//   "создай контрагента"                    → create_counterparty
+//   "создай счёт"                           → create_invoice
+//   "создай акт по счёту"                   → create_act_from_invoice  (Sprint 6B)
+//   "создай договор"                        → create_contract          (Sprint 6B)
+//   "покажи должников" / "анализ долгов"    → analyze_debt             (Sprint 6B)
+//   "создай платёж" / "входящий платёж" / "исходящий платёж" / "оплат" → create_payment (Sprint 6C)
+//   "предложи распределение" / "распредели" → suggest_payment_allocations (Sprint 6C)
+//   "не хватает данных"                     → план с missingFields, без actions
+//   иначе                                   → информационный план без actions с warning
 //
 // Контекст в MockAIProvider передаётся через систему — мы парсим из system-сообщения
 // строки вида "Контекст: organizationId=...; counterpartyId=...; invoiceId=...; today=...".
@@ -286,6 +288,119 @@ export class MockAIProvider implements AiProvider {
         };
       }
     } else if (
+      userText.includes("предложи распределение") ||
+      userText.includes("распредели платёж") ||
+      userText.includes("распредели платеж") ||
+      userText.includes("распредели сумму") ||
+      userText.includes("как распределить")
+    ) {
+      // Sprint 6C — suggest_payment_allocations (read-only)
+      const amount = extractAmount(userTextRaw) ?? 0;
+      if (!organizationId) {
+        plan = {
+          intent: "suggest_payment_allocations",
+          summary: "Хочу предложить распределение, но не выбрана организация.",
+          confidence: 0.5,
+          missingFields: ["organizationId"],
+          warnings: ["Выберите организацию"],
+          actions: [],
+        };
+      } else if (!counterpartyId) {
+        plan = {
+          intent: "suggest_payment_allocations",
+          summary: "Хочу предложить распределение, но не определён контрагент.",
+          confidence: 0.5,
+          missingFields: ["counterpartyId"],
+          warnings: ["Укажите контрагента или выберите его в контексте"],
+          actions: [],
+        };
+      } else if (amount <= 0) {
+        plan = {
+          intent: "suggest_payment_allocations",
+          summary: "Хочу предложить распределение, но сумма не определена.",
+          confidence: 0.5,
+          missingFields: ["amount"],
+          warnings: ["Укажите сумму платежа в рублях"],
+          actions: [],
+        };
+      } else {
+        plan = {
+          intent: "suggest_payment_allocations",
+          summary: `Предложить распределение ${amount} ₽ по неоплаченным счетам контрагента.`,
+          confidence: 0.92,
+          missingFields: [],
+          warnings: ["Read-only действие — не изменяет данные."],
+          actions: [{
+            id: nextActionId(),
+            type: "suggest_payment_allocations",
+            payload: { organizationId, counterpartyId, amount, asOfDate: today },
+          }],
+        };
+      }
+    } else if (
+      userText.includes("создай платёж") ||
+      userText.includes("создай платеж") ||
+      userText.includes("создай оплату") ||
+      userText.includes("входящий платёж") ||
+      userText.includes("входящий платеж") ||
+      userText.includes("исходящий платёж") ||
+      userText.includes("исходящий платеж") ||
+      userText.includes("оплата по счёту") ||
+      userText.includes("оплата по счету")
+    ) {
+      // Sprint 6C — create_payment
+      const amount = extractAmount(userTextRaw) ?? 0;
+      const direction: "IN" | "OUT" = userText.includes("исходящ") ? "OUT" : "IN";
+      const missing: string[] = [];
+      if (!organizationId) missing.push("organizationId");
+      if (!counterpartyId) missing.push("counterpartyId");
+      if (amount <= 0) missing.push("amount");
+
+      if (missing.length > 0) {
+        plan = {
+          intent: "create_payment",
+          summary: `Хочу создать ${direction === "IN" ? "входящий" : "исходящий"} платёж, не хватает данных.`,
+          confidence: 0.5,
+          missingFields: missing,
+          warnings: ["Уточните организацию, контрагента и сумму платежа"],
+          actions: [],
+        };
+      } else {
+        // IN с привязкой к счёту "по счёту" → один allocation на всю сумму, если invoiceId есть в контексте
+        const wantsInvoice = direction === "IN" && (
+          userText.includes("по счёту") || userText.includes("по счету") || userText.includes("оплата по")
+        );
+        const allocations = wantsInvoice && invoiceId
+          ? [{ invoiceId, amount }]
+          : undefined;
+
+        plan = {
+          intent: "create_payment",
+          summary: direction === "IN"
+            ? `Создать входящий платёж на ${amount} ₽${allocations ? ` с привязкой к счёту` : " (аванс)"}.`
+            : `Создать исходящий платёж на ${amount} ₽.`,
+          confidence: 0.88,
+          missingFields: [],
+          warnings: direction === "OUT"
+            ? ["Исходящий платёж — без привязки к нашим счетам."]
+            : (allocations ? [] : ["Сумма попадёт в аванс — счёт не привязан."]),
+          actions: [{
+            id: nextActionId(),
+            type: "create_payment",
+            payload: {
+              // organizationId/counterpartyId уже проверены выше через missing array — здесь они не null
+              organizationId: organizationId!,
+              counterpartyId: counterpartyId!,
+              date: today,
+              amount,
+              direction,
+              method: "BANK",
+              ...(allocations ? { allocations } : {}),
+            },
+          }],
+        };
+      }
+    } else if (
       userText.includes("покажи должник") ||
       userText.includes("должников") ||
       userText.includes("анализ долг") ||
@@ -324,7 +439,7 @@ export class MockAIProvider implements AiProvider {
     } else {
       plan = {
         intent: "unknown_request",
-        summary: "Mock AI: запрос не распознан. Поддерживаются: «создай контрагента ...», «создай счёт ...», «создай акт по счёту», «создай договор ...», «покажи должников».",
+        summary: "Mock AI: запрос не распознан. Поддерживаются: «создай контрагента ...», «создай счёт ...», «создай акт по счёту», «создай договор ...», «покажи должников», «создай платёж ...», «предложи распределение ...».",
         confidence: 0.2,
         missingFields: [],
         warnings: ["Mock provider не использует реальную модель. Попробуйте подключить настоящего провайдера в /ai/settings."],

@@ -86,14 +86,66 @@ describe("ai/schemas / actionPlanSchema", () => {
     expect(vatRateToNumber(22)).toBe(22);
   });
 
-  it("ALLOWED_ACTION_TYPES (Sprint 6B) содержит ровно 5 значений", () => {
+  it("ALLOWED_ACTION_TYPES (Sprint 6C) содержит ровно 7 значений", () => {
     expect(ALLOWED_ACTION_TYPES).toEqual([
       "create_counterparty",
       "create_invoice",
       "create_act_from_invoice",
       "create_contract",
       "analyze_debt",
+      "create_payment",
+      "suggest_payment_allocations",
     ]);
+  });
+
+  // Sprint 6C schemas
+  it("create_payment: amount > 0, direction IN|OUT, allocations опциональны", () => {
+    const ok = actionSchema.safeParse({
+      id: "a", type: "create_payment",
+      payload: { organizationId: ORG, counterpartyId: CP, date: "2026-05-22", amount: 1000, direction: "IN", method: "BANK" },
+    });
+    expect(ok.success).toBe(true);
+
+    const withAllocs = actionSchema.safeParse({
+      id: "a", type: "create_payment",
+      payload: {
+        organizationId: ORG, counterpartyId: CP, date: "2026-05-22", amount: 1000, direction: "IN",
+        allocations: [{ invoiceId: "33333333-3333-4333-8333-333333333333", amount: 1000 }],
+      },
+    });
+    expect(withAllocs.success).toBe(true);
+
+    const zeroAmount = actionSchema.safeParse({
+      id: "a", type: "create_payment",
+      payload: { organizationId: ORG, counterpartyId: CP, date: "2026-05-22", amount: 0, direction: "IN" },
+    });
+    expect(zeroAmount.success).toBe(false);
+
+    const badDirection = actionSchema.safeParse({
+      id: "a", type: "create_payment",
+      payload: { organizationId: ORG, counterpartyId: CP, date: "2026-05-22", amount: 1000, direction: "MAYBE" },
+    });
+    expect(badDirection.success).toBe(false);
+  });
+
+  it("suggest_payment_allocations: amount > 0, counterpartyId обязателен", () => {
+    const ok = actionSchema.safeParse({
+      id: "a", type: "suggest_payment_allocations",
+      payload: { organizationId: ORG, counterpartyId: CP, amount: 50000 },
+    });
+    expect(ok.success).toBe(true);
+
+    const noCp = actionSchema.safeParse({
+      id: "a", type: "suggest_payment_allocations",
+      payload: { organizationId: ORG, amount: 50000 },
+    });
+    expect(noCp.success).toBe(false);
+
+    const zero = actionSchema.safeParse({
+      id: "a", type: "suggest_payment_allocations",
+      payload: { organizationId: ORG, counterpartyId: CP, amount: 0 },
+    });
+    expect(zero.success).toBe(false);
   });
 
   // Sprint 6B schemas

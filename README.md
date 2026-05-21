@@ -98,8 +98,8 @@ npm run dev
 # Backend
 cd backend
 npm run typecheck          # tsc --noEmit
-npm run test:unit          # vitest unit (105 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B)
-npm run test:integration   # vitest integration (93 теста): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1
+npm run test:unit          # vitest unit (114 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B+6C)
+npm run test:integration   # vitest integration (103 теста): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1 + ai-sprint6c
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
 npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
@@ -225,13 +225,15 @@ message → action plan (DRAFT) → preview → confirm → executor → audit l
   | Mock         | `mock://local`                     | dev/test без сети |
 - **Хранение ключа**: AES-256-GCM, ключ деривируется от `JWT_SECRET`. На клиент возвращается только `maskedApiKey` (например `sk-•••••••abcd`).
 - **JSON action-plan**: AI всегда возвращает один JSON-объект с полями `intent / summary / confidence / missingFields / warnings / actions[]`. Любые типы action кроме `create_counterparty` и `create_invoice` отклоняются на уровне валидатора.
-- **Executor** в Sprint 6A+6B поддерживает 5 действий:
+- **Executor** в Sprint 6A+6B+6C поддерживает 7 действий:
   - `create_counterparty` — name + ИНН (+ опц. КПП/адрес/телефон/email);
   - `create_invoice` — date + items (`vatRate: "no_vat" | 0 | 10 | 20 | 22`);
   - `create_act_from_invoice` (Sprint 6B) — копирует позиции счёта в акт; защита от дубля (1 акт на счёт); cancelled счёт отклоняется;
   - `create_contract` (Sprint 6B) — создаёт договор с обязательным `subject`; auto-number `Д-NNN/YYYY`; опциональный `templateId` (проверяется owner); опциональный default-template организации, если задан;
   - `analyze_debt` (Sprint 6B) — **read-only** анализ задолженностей. Возвращает `totalDebt / overdueDebt / counterparties[] / recommendations[]`. Не пишет бизнес-данные.
-  - Каждое действие проверяет ownership organization / counterparty / invoice / template (нельзя писать в чужую организацию).
+  - `create_payment` (Sprint 6C) — создаёт `Payment` через существующий `payments-service.createPaymentInTx` (единая бизнес-логика). IN с опц. allocations; OUT без allocations (executor отклоняет). Все safety-проверки (ownership / переплата / cross-org / cancelled invoice) идут из payments-service.
+  - `suggest_payment_allocations` (Sprint 6C) — **read-only** FIFO-предложение распределения суммы по неоплаченным счетам контрагента. Возвращает `allocatedAmount / advanceAmount / allocations[]` без записи в БД.
+  - Каждое действие проверяет ownership organization / counterparty / invoice / template / bankAccount (нельзя писать в чужую организацию).
 - **Audit log** (`AiAuditLog`) — каждое успешно применённое действие записывается с `actionType / targetType / targetId / payloadJson`.
 - **TTL** action plan — 24 часа. Повторный confirm одного и того же plan возвращает 409.
 - **Контекст-лоадер** (`lib/ai/context-loader.ts`): подгружает только данные текущего пользователя — организации, до 20 контрагентов, последние 20 счетов, неоплаченные счета, последние 20 платежей. `apiKey` и зашифрованные секреты НЕ передаются модели. Объём лимитирован.
@@ -280,15 +282,17 @@ POST /api/v1/ai/action-plans/:id/confirm            применить approved 
 6. Отправить «**Создай акт по последнему счёту**» (Sprint 6B) → action plan с `create_act_from_invoice`. Подтвердить → акт появится в **Документы → Акты**. Повторная отправка вернёт ошибку «по счёту уже создан акт».
 7. Отправить «**Создай договор на оказание консультационных услуг**» (Sprint 6B) → action plan с `create_contract`. Подтвердить → договор появится в **Справочники → Договоры** (auto-number `Д-NNN/2026`).
 8. Отправить «**Покажи должников**» (Sprint 6B) → action plan с `analyze_debt`, бейдж **«Только анализ, данные не изменяются»**. Подтвердить → виден блок «Задолженность» с totalDebt / overdueDebt / списком должников / рекомендациями.
+8.5. (Sprint 6C) Отправить «**Создай входящий платёж на 10000 по счёту**» → action plan с `create_payment`, IN, бейдж «Создаст платёж после подтверждения», в preview видны allocations. Подтвердить → платёж появится в **Финансы → Платежи**, счёт станет PAID/PARTIALLY_PAID.
+8.6. (Sprint 6C) Отправить «**Распредели платёж 50000 по счетам контрагента**» → action plan с `suggest_payment_allocations` (read-only badge). Подтвердить → виден блок «Предложение распределения» с FIFO-разнесением и advance. Платежи в БД не создаются.
 9. На странице `/ai` под чатом — блок **«История AI-действий»** (Sprint 6.1): последние 50 подтверждённых действий по выбранной организации, с ссылками на созданные сущности. Для `analyze_debt` targetId=null (read-only).
 10. (опц.) Через API: `GET /api/v1/ai/audit-log?organizationId=<id>` — тот же список, только свои организации.
 
 ### Что AI пока НЕ умеет (важно)
 
-- **НЕ** создаёт платежи (`Payment`) и не разносит оплаты (`PaymentAllocation`).
-- **НЕ** импортирует банковскую выписку (это делается вручную через `/bank-import`).
-- **НЕ** редактирует и **НЕ** удаляет существующие документы / контрагентов / договоры.
-- **НЕ** меняет статусы документов или суммы.
+- **НЕ** импортирует банковскую выписку (это делается вручную через `/bank-import`) — Sprint 6C сознательно не включил bank-import AI.
+- **НЕ** редактирует и **НЕ** удаляет существующие документы / контрагентов / договоры / платежи (нет `update_*` / `delete_*` action).
+- **НЕ** меняет статусы документов или суммы существующих записей.
+- **НЕ** распределяет платежи автоматически — только через явное подтверждение `create_payment` с allocations или после ручного review результата `suggest_payment_allocations`.
 - **НЕ** даёт юридических или налоговых гарантий — это инструмент-помощник.
 
 Эти ограничения закреплены в SYSTEM_PROMPT и в whitelist `ALLOWED_ACTION_TYPES`. Если в одном из этих сценариев AI вернёт action — это бага.

@@ -164,4 +164,73 @@ describe("MockAIProvider", () => {
       expect(p.plan.actions[0].payload.counterpartyId).toBe(CP);
     }
   });
+
+  // Sprint 6C
+  it("«создай входящий платёж на 10000 по счёту» → create_payment IN с allocations", async () => {
+    const r = await provider.chat([
+      { role: "system", content: ctxSystem(ORG, CP, INV) },
+      { role: "user", content: "Создай входящий платёж от ООО Бета на 10000 по счёту" },
+    ]);
+    const p = parseActionPlan(r.text);
+    expect(p.ok).toBe(true);
+    expect(p.plan?.actions.length).toBe(1);
+    if (p.plan?.actions[0]?.type === "create_payment") {
+      expect(p.plan.actions[0].payload.direction).toBe("IN");
+      expect(p.plan.actions[0].payload.amount).toBe(10000);
+      expect(p.plan.actions[0].payload.allocations?.length).toBe(1);
+      expect(p.plan.actions[0].payload.allocations?.[0]?.invoiceId).toBe(INV);
+    }
+  });
+
+  it("«создай исходящий платёж 25000» → create_payment OUT БЕЗ allocations", async () => {
+    const r = await provider.chat([
+      { role: "system", content: ctxSystem(ORG, CP, INV) },
+      { role: "user", content: "Создай исходящий платёж 25000" },
+    ]);
+    const p = parseActionPlan(r.text);
+    expect(p.ok).toBe(true);
+    expect(p.plan?.actions.length).toBe(1);
+    if (p.plan?.actions[0]?.type === "create_payment") {
+      expect(p.plan.actions[0].payload.direction).toBe("OUT");
+      expect(p.plan.actions[0].payload.amount).toBe(25000);
+      expect(p.plan.actions[0].payload.allocations).toBeUndefined();
+    }
+  });
+
+  it("«создай платёж» без counterpartyId → missingFields", async () => {
+    const r = await provider.chat([
+      { role: "system", content: ctxSystem(ORG, null) },
+      { role: "user", content: "Создай входящий платёж 5000" },
+    ]);
+    const p = parseActionPlan(r.text);
+    expect(p.ok).toBe(true);
+    expect(p.plan?.actions.length).toBe(0);
+    expect(p.plan?.missingFields).toContain("counterpartyId");
+  });
+
+  it("«распредели платёж 50000» → suggest_payment_allocations", async () => {
+    const r = await provider.chat([
+      { role: "system", content: ctxSystem(ORG, CP) },
+      { role: "user", content: "Распредели платёж 50000 по счетам контрагента" },
+    ]);
+    const p = parseActionPlan(r.text);
+    expect(p.ok).toBe(true);
+    expect(p.plan?.actions.length).toBe(1);
+    if (p.plan?.actions[0]?.type === "suggest_payment_allocations") {
+      expect(p.plan.actions[0].payload.amount).toBe(50000);
+      expect(p.plan.actions[0].payload.organizationId).toBe(ORG);
+      expect(p.plan.actions[0].payload.counterpartyId).toBe(CP);
+    }
+  });
+
+  it("«предложи распределение» без counterpartyId → missingFields", async () => {
+    const r = await provider.chat([
+      { role: "system", content: ctxSystem(ORG, null) },
+      { role: "user", content: "Предложи распределение 10000" },
+    ]);
+    const p = parseActionPlan(r.text);
+    expect(p.ok).toBe(true);
+    expect(p.plan?.actions.length).toBe(0);
+    expect(p.plan?.missingFields).toContain("counterpartyId");
+  });
 });

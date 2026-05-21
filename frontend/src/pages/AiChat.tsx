@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3 } from "lucide-react";
+import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,9 +19,11 @@ type ActionType =
   | "create_invoice"
   | "create_act_from_invoice"
   | "create_contract"
-  | "analyze_debt";
+  | "analyze_debt"
+  | "create_payment"
+  | "suggest_payment_allocations";
 
-type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis";
+type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis" | "payment";
 
 interface CreateCounterpartyPayload {
   organizationId: string;
@@ -92,12 +94,57 @@ interface DebtAnalysisResult {
   asOfDate: string;
 }
 
+interface PaymentAllocationItem {
+  invoiceId: string;
+  amount: number;
+}
+
+interface CreatePaymentPayload {
+  organizationId: string;
+  counterpartyId: string;
+  bankAccountId?: string | null;
+  date: string;
+  amount: number;
+  direction: "IN" | "OUT";
+  method?: "BANK" | "CASH" | "CARD" | "OTHER";
+  purpose?: string | null;
+  reference?: string | null;
+  allocations?: PaymentAllocationItem[] | null;
+}
+
+interface SuggestPaymentAllocationsPayload {
+  organizationId: string;
+  counterpartyId: string;
+  amount: number;
+  asOfDate?: string | null;
+}
+
+interface PaymentSuggestionAllocation {
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  invoiceBalance: number;
+  suggestedAmount: number;
+  reason: string;
+}
+
+interface PaymentSuggestionResult {
+  amount: number;
+  allocatedAmount: number;
+  advanceAmount: number;
+  allocations: PaymentSuggestionAllocation[];
+  warnings: string[];
+  asOfDate: string;
+}
+
 type Action =
   | { id: string; type: "create_counterparty"; payload: CreateCounterpartyPayload }
   | { id: string; type: "create_invoice"; payload: CreateInvoicePayload }
   | { id: string; type: "create_act_from_invoice"; payload: CreateActFromInvoicePayload }
   | { id: string; type: "create_contract"; payload: CreateContractPayload }
-  | { id: string; type: "analyze_debt"; payload: AnalyzeDebtPayload };
+  | { id: string; type: "analyze_debt"; payload: AnalyzeDebtPayload }
+  | { id: string; type: "create_payment"; payload: CreatePaymentPayload }
+  | { id: string; type: "suggest_payment_allocations"; payload: SuggestPaymentAllocationsPayload };
 
 interface ActionPlan {
   intent: string;
@@ -122,7 +169,7 @@ interface AppliedActionResult {
   actionType: ActionType;
   targetType: TargetType;
   targetId: string | null;
-  result?: DebtAnalysisResult;
+  result?: DebtAnalysisResult | PaymentSuggestionResult;
 }
 
 interface ConfirmResult {
@@ -215,11 +262,14 @@ export function AiChatPage() {
       if (okCount > 0 && errCount === 0) toast.success(`Применено: ${okCount}`);
       else if (errCount > 0) toast.error(`Применено: ${okCount}, ошибок: ${errCount}`);
       else toast(`Ничего не применено`);
-      // Инвалидация связанных запросов (Sprint 6A + 6B)
+      // Инвалидация связанных запросов (Sprint 6A + 6B + 6C)
       qc.invalidateQueries({ queryKey: ["counterparties"] });
       qc.invalidateQueries({ queryKey: ["invoices"] });
       qc.invalidateQueries({ queryKey: ["acts"] });
       qc.invalidateQueries({ queryKey: ["contracts"] });
+      qc.invalidateQueries({ queryKey: ["payments"] });
+      qc.invalidateQueries({ queryKey: ["counterparty-statement"] });
+      qc.invalidateQueries({ queryKey: ["invoice-payments"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["cps-opts"] });
       qc.invalidateQueries({ queryKey: ["ai-audit-log"] });
@@ -276,6 +326,8 @@ export function AiChatPage() {
               "Создай акт по последнему счёту",
               "Создай договор на оказание консультационных услуг",
               "Покажи должников",
+              "Создай входящий платёж на 10000 по счёту",
+              "Распредели платёж 50000 по счетам контрагента",
             ].map((s) => (
               <Button key={s} variant="outline" className="w-full justify-start" onClick={() => setInput(s)}>
                 {s}
@@ -336,7 +388,7 @@ export function AiChatPage() {
 
 /* ---------- subcomponents ---------- */
 
-const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt"];
+const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt", "suggest_payment_allocations"];
 
 function isReadOnly(t: ActionType): boolean {
   return READ_ONLY_ACTION_TYPES.includes(t);
@@ -500,6 +552,62 @@ function ActionPreview({ action }: { action: Action }) {
       </div>
     );
   }
+  if (action.type === "create_payment") {
+    const p = action.payload;
+    const allocSum = (p.allocations ?? []).reduce((s, a) => s + a.amount, 0);
+    const advance = Math.max(0, p.amount - allocSum);
+    const dirIcon = p.direction === "IN" ? <ArrowDownToLine className="h-3.5 w-3.5" /> : <ArrowUpFromLine className="h-3.5 w-3.5" />;
+    return (
+      <div className="rounded-md border p-3 bg-muted/30 text-sm">
+        <div className="font-semibold flex items-center gap-1 text-xs mb-1">
+          <Wallet className="h-3.5 w-3.5" /> Создание платежа
+          <Badge variant="outline" className="ml-2 text-[10px] flex items-center gap-1">
+            {dirIcon} {p.direction === "IN" ? "входящий" : "исходящий"}
+          </Badge>
+        </div>
+        <div>Дата: <span className="font-mono">{p.date}</span></div>
+        <div>Сумма: <span className="font-mono font-semibold">{p.amount.toFixed(2)} ₽</span></div>
+        <div>Контрагент: <span className="font-mono">{p.counterpartyId}</span></div>
+        {p.bankAccountId ? <div>Расч.счёт: <span className="font-mono text-xs">{p.bankAccountId}</span></div> : null}
+        {p.purpose ? <div className="text-xs text-muted-foreground">Назначение: {p.purpose}</div> : null}
+        {p.reference ? <div className="text-xs text-muted-foreground">Ссылка: {p.reference}</div> : null}
+        {p.allocations && p.allocations.length > 0 ? (
+          <div className="mt-1">
+            <div className="text-xs font-medium">Распределение ({p.allocations.length}):</div>
+            <ul className="text-xs ml-3">
+              {p.allocations.map((a, i) => (
+                <li key={i}>• счёт <span className="font-mono">{a.invoiceId.slice(0, 8)}…</span> — {a.amount.toFixed(2)} ₽</li>
+              ))}
+            </ul>
+            {advance > 0.005 ? (
+              <div className="text-xs text-amber-700 mt-1">Аванс: {advance.toFixed(2)} ₽ (остаток сверх долга)</div>
+            ) : null}
+          </div>
+        ) : p.direction === "IN" ? (
+          <div className="text-xs text-amber-700 mt-1">Без allocations — вся сумма попадёт в аванс контрагента</div>
+        ) : (
+          <div className="text-xs text-muted-foreground mt-1">Исходящий платёж — без привязки к нашим счетам</div>
+        )}
+      </div>
+    );
+  }
+  if (action.type === "suggest_payment_allocations") {
+    const p = action.payload;
+    return (
+      <div className="rounded-md border p-3 bg-muted/30 text-sm">
+        <div className="font-semibold flex items-center gap-1 text-xs mb-1">
+          <Wallet className="h-3.5 w-3.5" /> Предложение распределения
+          <Badge variant="secondary" className="ml-2 text-[10px]">не изменяет данные</Badge>
+        </div>
+        <div>Сумма для распределения: <span className="font-mono font-semibold">{p.amount.toFixed(2)} ₽</span></div>
+        <div>Контрагент: <span className="font-mono">{p.counterpartyId}</span></div>
+        {p.asOfDate ? <div>На дату: <span className="font-mono">{p.asOfDate}</span></div> : null}
+        <div className="text-xs text-muted-foreground mt-1">
+          Backend подберёт неоплаченные счета по FIFO и вернёт proposal — без записи в БД.
+        </div>
+      </div>
+    );
+  }
   // analyze_debt
   const p = action.payload;
   return (
@@ -517,7 +625,10 @@ function ActionPreview({ action }: { action: Action }) {
 }
 
 function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose: () => void }) {
-  const analysis = result.applied.find((a) => a.actionType === "analyze_debt" && a.result)?.result;
+  const debtAnalysis = result.applied.find((a) => a.actionType === "analyze_debt" && a.result)?.result as
+    | DebtAnalysisResult | undefined;
+  const suggestion = result.applied.find((a) => a.actionType === "suggest_payment_allocations" && a.result)?.result as
+    | PaymentSuggestionResult | undefined;
   return (
     <Card className={result.errors.length > 0 ? "border-destructive" : "border-emerald-600"}>
       <CardHeader>
@@ -548,7 +659,8 @@ function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose
           </div>
         ) : null}
 
-        {analysis ? <DebtAnalysisBlock analysis={analysis} /> : null}
+        {debtAnalysis ? <DebtAnalysisBlock analysis={debtAnalysis} /> : null}
+        {suggestion ? <PaymentSuggestionBlock suggestion={suggestion} /> : null}
         {result.skipped.length > 0 ? (
           <div>
             <div className="font-semibold text-muted-foreground">⊘ Пропущено ({result.skipped.length}):</div>
@@ -578,7 +690,60 @@ function labelFor(t: ActionType): string {
     case "create_act_from_invoice": return "Создание акта по счёту";
     case "create_contract": return "Создание договора";
     case "analyze_debt": return "Анализ задолженности";
+    case "create_payment": return "Создание платежа";
+    case "suggest_payment_allocations": return "Предложение распределения";
   }
+}
+
+function PaymentSuggestionBlock({ suggestion }: { suggestion: PaymentSuggestionResult }) {
+  return (
+    <div className="rounded-md border bg-sky-50 dark:bg-sky-950/30 p-3 mt-2">
+      <div className="text-sm font-semibold mb-2 flex items-center gap-2">
+        <Wallet className="h-4 w-4" /> Предложение распределения на {suggestion.asOfDate}
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-xs mb-2">
+        <div>
+          <div className="text-muted-foreground">Сумма платежа</div>
+          <div className="font-mono font-semibold">{suggestion.amount.toFixed(2)} ₽</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Распределено</div>
+          <div className="font-mono font-semibold text-emerald-700">{suggestion.allocatedAmount.toFixed(2)} ₽</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Аванс</div>
+          <div className={`font-mono font-semibold ${suggestion.advanceAmount > 0.005 ? "text-amber-700" : ""}`}>
+            {suggestion.advanceAmount.toFixed(2)} ₽
+          </div>
+        </div>
+      </div>
+      {suggestion.allocations.length > 0 ? (
+        <>
+          <div className="text-xs font-semibold mt-2 mb-1">Предложенное распределение ({suggestion.allocations.length}):</div>
+          <ul className="space-y-1 text-xs">
+            {suggestion.allocations.map((a) => (
+              <li key={a.invoiceId} className="border-b border-sky-200 dark:border-sky-800 pb-1 last:border-0">
+                <span className="font-medium font-mono">{a.invoiceNumber}</span>{" "}
+                от {a.invoiceDate} — остаток {a.invoiceBalance.toFixed(2)} ₽, к зачислению{" "}
+                <span className="font-mono font-semibold">{a.suggestedAmount.toFixed(2)} ₽</span>
+                <div className="text-muted-foreground">{a.reason}</div>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="text-xs text-muted-foreground">Подходящих счетов нет — вся сумма попадёт в аванс.</div>
+      )}
+      {suggestion.warnings.length > 0 ? (
+        <ul className="text-xs mt-2 text-amber-700 space-y-0.5">
+          {suggestion.warnings.map((w, i) => <li key={i}>• {w}</li>)}
+        </ul>
+      ) : null}
+      <div className="text-xs text-muted-foreground mt-2 border-t pt-1">
+        Это только предложение — для записи платежа отправьте запрос «Создай входящий платёж...».
+      </div>
+    </div>
+  );
 }
 
 function AuditLogCard({ items, loading }: { items: AuditLogEntry[]; loading: boolean }) {
@@ -632,6 +797,7 @@ function labelForTarget(t: TargetType): string {
     case "invoice": return "счёт";
     case "act": return "акт";
     case "contract": return "договор";
+    case "payment": return "платёж";
     case "analysis": return "результат";
   }
 }
@@ -643,6 +809,7 @@ function routeFor(t: TargetType, id: string): string {
     case "invoice": return `/invoices/${id}`;
     case "act": return `/acts/${id}`;
     case "contract": return `/contracts?focus=${id}`;
+    case "payment": return `/payments?focus=${id}`;
     case "analysis": return "/ai";
   }
 }
