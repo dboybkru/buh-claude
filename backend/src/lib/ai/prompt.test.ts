@@ -22,15 +22,30 @@ describe("ai/prompt", () => {
     expect(SYSTEM_PROMPT).toMatch(/Любые другие типы запрещены/i);
   });
 
+  // Sprint 6B
+  it("содержит новые action types Sprint 6B", () => {
+    expect(SYSTEM_PROMPT).toMatch(/create_act_from_invoice/);
+    expect(SYSTEM_PROMPT).toMatch(/create_contract/);
+    expect(SYSTEM_PROMPT).toMatch(/analyze_debt/);
+  });
+
+  it("явно запрещает платежные и редакционные действия в Sprint 6B", () => {
+    expect(SYSTEM_PROMPT).toMatch(/НЕЛЬЗЯ создавать платежи/i);
+    expect(SYSTEM_PROMPT).toMatch(/НЕЛЬЗЯ редактировать или удалять/i);
+  });
+
   it("содержит запрет на работу с чужими данными", () => {
     expect(SYSTEM_PROMPT).toMatch(/чужими организациями/i);
   });
 
-  it("FULL_SYSTEM_PROMPT содержит few-shot примеры", () => {
+  it("FULL_SYSTEM_PROMPT содержит few-shot примеры (включая 6B)", () => {
     expect(FULL_SYSTEM_PROMPT).toContain(SYSTEM_PROMPT);
     expect(FULL_SYSTEM_PROMPT).toContain(FEW_SHOT_EXAMPLES);
     expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 1.*create_counterparty/s);
     expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 2.*create_invoice/s);
     expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 3.*missingFields/s);
+    expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 4.*create_act_from_invoice/s);
+    expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 5.*create_contract/s);
+    expect(FULL_SYSTEM_PROMPT).toMatch(/Пример 6.*analyze_debt/s);
   });
 });

@@ -1,31 +1,35 @@
-// Sprint 6A: MockAIProvider — детерминированные ответы для dev/test без внешней сети.
+// Sprint 6A + 6B: MockAIProvider — детерминированные ответы для dev/test без внешней сети.
 // Поведение определяется ключевыми словами в последнем user-сообщении:
 //
-//   "создай контрагента" → create_counterparty
-//   "создай счёт"        → create_invoice
-//   "не хватает данных"  → план с missingFields, без actions
-//   иначе                → информационный план без actions с warning
+//   "создай контрагента"            → create_counterparty
+//   "создай счёт"                   → create_invoice
+//   "создай акт по счёту"           → create_act_from_invoice  (Sprint 6B)
+//   "создай договор"                → create_contract          (Sprint 6B)
+//   "покажи должников" / "анализ"   → analyze_debt             (Sprint 6B)
+//   "не хватает данных"             → план с missingFields, без actions
+//   иначе                           → информационный план без actions с warning
 //
 // Контекст в MockAIProvider передаётся через систему — мы парсим из system-сообщения
-// строки вида "Контекст: organizationId=...; counterpartyId=...; today=...".
+// строки вида "Контекст: organizationId=...; counterpartyId=...; invoiceId=...; today=...".
 
 import type { AiProvider, ChatMessage, ChatResult } from "./types.js";
 import type { ActionPlan } from "../schemas.js";
 
 const MOCK_MODELS = ["mock-gpt-base", "mock-gpt-instruct", "mock-thinking"];
 
-function extractContext(messages: ChatMessage[]): { organizationId: string | null; counterpartyId: string | null; today: string } {
+function extractContext(messages: ChatMessage[]): { organizationId: string | null; counterpartyId: string | null; invoiceId: string | null; today: string } {
   // Берём ПОСЛЕДНЕЕ system-сообщение — это контекст от loadAiContext (а не few-shot
-  // примеры с hardcoded id из FULL_SYSTEM_PROMPT). System-prompt идёт первым,
-  // context — вторым.
+  // примеры с hardcoded id из FULL_SYSTEM_PROMPT).
   const systems = messages.filter((m) => m.role === "system");
   const sys = systems.length > 0 ? systems[systems.length - 1]!.content : "";
   const orgMatch = /organizationId\s*=\s*"?([0-9a-f-]{36})/i.exec(sys);
   const cpMatch = /counterpartyId\s*=\s*"?([0-9a-f-]{36})/i.exec(sys);
+  const invMatch = /invoiceId\s*=\s*"?([0-9a-f-]{36})/i.exec(sys);
   const dateMatch = /today\s*=\s*"?(\d{4}-\d{2}-\d{2})/i.exec(sys);
   return {
     organizationId: orgMatch?.[1] ?? null,
     counterpartyId: cpMatch?.[1] ?? null,
+    invoiceId: invMatch?.[1] ?? null,
     today: dateMatch?.[1] ?? new Date().toISOString().slice(0, 10),
   };
 }
@@ -90,11 +94,21 @@ function nextActionId(): string {
   return `mock-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Извлечь subject договора из user-сообщения. Ищем после "договор на/о/об" или ключевых слов. */
+function extractSubject(text: string): string | null {
+  const m = /договор\s+(?:на|о[бо]?|по)\s+(.+?)(?:[.,;]|$)/i.exec(text);
+  if (m) return m[1]!.trim().slice(0, 200);
+  const m2 = /предмет[:\s]+(.+?)(?:[.,;]|$)/i.exec(text);
+  if (m2) return m2[1]!.trim().slice(0, 200);
+  return null;
+}
+
 export class MockAIProvider implements AiProvider {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async chat(messages: ChatMessage[], _opts?: { responseFormat?: "json_object" }): Promise<ChatResult> {
-    const userText = lastUserText(messages).toLowerCase();
-    const { organizationId, counterpartyId, today } = extractContext(messages);
+    const userTextRaw = lastUserText(messages);
+    const userText = userTextRaw.toLowerCase();
+    const { organizationId, counterpartyId, invoiceId, today } = extractContext(messages);
 
     let plan: ActionPlan;
 
@@ -186,10 +200,131 @@ export class MockAIProvider implements AiProvider {
           }],
         };
       }
+    } else if (userText.includes("создай акт") || userText.includes("создать акт")) {
+      // Sprint 6B — create_act_from_invoice
+      if (!organizationId) {
+        plan = {
+          intent: "create_act_from_invoice",
+          summary: "Хочу создать акт, но не выбрана организация.",
+          confidence: 0.5,
+          missingFields: ["organizationId"],
+          warnings: ["Выберите организацию на странице AI assistant"],
+          actions: [],
+        };
+      } else if (!invoiceId) {
+        plan = {
+          intent: "create_act_from_invoice",
+          summary: "Хочу создать акт на основании счёта, но в контексте нет ни одного счёта.",
+          confidence: 0.4,
+          missingFields: ["invoiceId"],
+          warnings: ["Сначала создайте счёт — акт формируется на его основании."],
+          actions: [],
+        };
+      } else {
+        plan = {
+          intent: "create_act_from_invoice",
+          summary: "Создать акт на основании последнего счёта из контекста.",
+          confidence: 0.88,
+          missingFields: [],
+          warnings: [],
+          actions: [{
+            id: nextActionId(),
+            type: "create_act_from_invoice",
+            payload: { organizationId, invoiceId, date: today, note: null },
+          }],
+        };
+      }
+    } else if (userText.includes("создай договор") || userText.includes("создать договор")) {
+      // Sprint 6B — create_contract
+      const subject = extractSubject(userTextRaw);
+      if (!organizationId) {
+        plan = {
+          intent: "create_contract",
+          summary: "Хочу создать договор, но не выбрана организация.",
+          confidence: 0.5,
+          missingFields: ["organizationId"],
+          warnings: ["Выберите организацию на странице AI assistant"],
+          actions: [],
+        };
+      } else if (!counterpartyId) {
+        plan = {
+          intent: "create_contract",
+          summary: "Хочу создать договор, но не определён контрагент.",
+          confidence: 0.5,
+          missingFields: ["counterpartyId"],
+          warnings: ["В контексте нет контрагентов — создайте контрагента и повторите запрос"],
+          actions: [],
+        };
+      } else if (!subject) {
+        plan = {
+          intent: "create_contract",
+          summary: "Хочу создать договор, но не указан предмет.",
+          confidence: 0.5,
+          missingFields: ["subject"],
+          warnings: ["Уточните: «договор на оказание услуг…», «договор о поставке…» и т.п."],
+          actions: [],
+        };
+      } else {
+        const amount = extractAmount(userTextRaw);
+        plan = {
+          intent: "create_contract",
+          summary: `Создать договор с контрагентом, предмет: «${subject}»${amount ? ", сумма " + amount + " ₽" : ""}.`,
+          confidence: 0.85,
+          missingFields: [],
+          warnings: amount ? [] : ["Сумма не указана — будет создан договор без суммы"],
+          actions: [{
+            id: nextActionId(),
+            type: "create_contract",
+            payload: {
+              organizationId,
+              counterpartyId,
+              subject,
+              ...(amount ? { amount } : {}),
+              date: today,
+            },
+          }],
+        };
+      }
+    } else if (
+      userText.includes("покажи должник") ||
+      userText.includes("должников") ||
+      userText.includes("анализ долг") ||
+      userText.includes("анализ задолж")
+    ) {
+      // Sprint 6B — analyze_debt
+      if (!organizationId) {
+        plan = {
+          intent: "analyze_debt",
+          summary: "Хочу проанализировать задолженности, но не выбрана организация.",
+          confidence: 0.5,
+          missingFields: ["organizationId"],
+          warnings: ["Выберите организацию на странице AI assistant"],
+          actions: [],
+        };
+      } else {
+        plan = {
+          intent: "analyze_debt",
+          summary: counterpartyId
+            ? "Проанализировать задолженность выбранного контрагента."
+            : "Проанализировать задолженности по организации (топ должников).",
+          confidence: 0.92,
+          missingFields: [],
+          warnings: ["Read-only действие — не изменяет данные."],
+          actions: [{
+            id: nextActionId(),
+            type: "analyze_debt",
+            payload: {
+              organizationId,
+              ...(counterpartyId ? { counterpartyId } : {}),
+              asOfDate: today,
+            },
+          }],
+        };
+      }
     } else {
       plan = {
         intent: "unknown_request",
-        summary: "Mock AI: запрос не распознан. В Sprint 6A поддерживаются только команды «создай контрагента ...» и «создай счёт ...».",
+        summary: "Mock AI: запрос не распознан. Поддерживаются: «создай контрагента ...», «создай счёт ...», «создай акт по счёту», «создай договор ...», «покажи должников».",
         confidence: 0.2,
         missingFields: [],
         warnings: ["Mock provider не использует реальную модель. Попробуйте подключить настоящего провайдера в /ai/settings."],

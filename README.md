@@ -98,8 +98,8 @@ npm run dev
 # Backend
 cd backend
 npm run typecheck          # tsc --noEmit
-npm run test:unit          # vitest unit (94 теста): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt)
-npm run test:integration   # vitest integration (76 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow
+npm run test:unit          # vitest unit (105 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B)
+npm run test:integration   # vitest integration (85 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
 npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
@@ -225,10 +225,13 @@ message → action plan (DRAFT) → preview → confirm → executor → audit l
   | Mock         | `mock://local`                     | dev/test без сети |
 - **Хранение ключа**: AES-256-GCM, ключ деривируется от `JWT_SECRET`. На клиент возвращается только `maskedApiKey` (например `sk-•••••••abcd`).
 - **JSON action-plan**: AI всегда возвращает один JSON-объект с полями `intent / summary / confidence / missingFields / warnings / actions[]`. Любые типы action кроме `create_counterparty` и `create_invoice` отклоняются на уровне валидатора.
-- **Executor** ограничен двумя действиями:
+- **Executor** в Sprint 6A+6B поддерживает 5 действий:
   - `create_counterparty` — name + ИНН (+ опц. КПП/адрес/телефон/email);
-  - `create_invoice` — date + items (`vatRate: "no_vat" | 0 | 10 | 20 | 22`).
-  - Каждое действие проверяет ownership organization/counterparty (нельзя писать в чужую организацию).
+  - `create_invoice` — date + items (`vatRate: "no_vat" | 0 | 10 | 20 | 22`);
+  - `create_act_from_invoice` (Sprint 6B) — копирует позиции счёта в акт; защита от дубля (1 акт на счёт); cancelled счёт отклоняется;
+  - `create_contract` (Sprint 6B) — создаёт договор с обязательным `subject`; auto-number `Д-NNN/YYYY`; опциональный `templateId` (проверяется owner); опциональный default-template организации, если задан;
+  - `analyze_debt` (Sprint 6B) — **read-only** анализ задолженностей. Возвращает `totalDebt / overdueDebt / counterparties[] / recommendations[]`. Не пишет бизнес-данные.
+  - Каждое действие проверяет ownership organization / counterparty / invoice / template (нельзя писать в чужую организацию).
 - **Audit log** (`AiAuditLog`) — каждое успешно применённое действие записывается с `actionType / targetType / targetId / payloadJson`.
 - **TTL** action plan — 24 часа. Повторный confirm одного и того же plan возвращает 409.
 - **Контекст-лоадер** (`lib/ai/context-loader.ts`): подгружает только данные текущего пользователя — организации, до 20 контрагентов, последние 20 счетов, неоплаченные счета, последние 20 платежей. `apiKey` и зашифрованные секреты НЕ передаются модели. Объём лимитирован.
@@ -250,9 +253,15 @@ POST /api/v1/ai/action-plans/:id/confirm            применить approved 
 - Подписи / номера / суммы / даты — AI не выдумывает их. Если их нет в контексте, попадают в `missingFields` и UI блокирует confirm.
 - Все изменения проходят через `executor.ts` с явной валидацией ownership — даже подделанный JSON не сможет записать в чужую организацию.
 
-### Ограничения Sprint 6A
+### Ограничения Sprint 6A + 6B
 
-- В executor поддерживаются **только 2 типа action**. `create_act`, `create_contract`, `create_payment`, debt analysis, AI-bank-import — отложены на Sprint 6B+.
+- В executor поддерживаются **5 типов action** (см. список выше). Платежи / распределения / редактирование / удаление документов / bank-import AI — отсутствуют **сознательно** и отложены на следующие спринты.
+- AI **НЕ умеет**:
+  - создавать платежи (`Payment`) и разносить оплаты (`PaymentAllocation`);
+  - импортировать банковскую выписку;
+  - редактировать или удалять существующие счета / акты / договоры / контрагентов;
+  - менять статусы документов или suммы;
+  - менять `AiSettings` / `AiAuditLog` / какие-либо системные сущности.
 - Качество AI-плана зависит от модели и провайдера. Mock-провайдер даёт детерминированные ответы только на простые шаблоны.
 - AI не даёт юридических / налоговых гарантий — это инструмент-помощник.
 - Внешние API могут быть недоступны (502, timeout, rate-limit) — настройки сохраняются, но `/chat` вернёт ошибку.
@@ -262,19 +271,21 @@ POST /api/v1/ai/action-plans/:id/confirm            применить approved 
 1. Открыть `/ai/settings` → выбрать «Mock (dev/test)» → Сохранить.
 2. Нажать «Проверить подключение» — должно вернуть `ok`.
 3. Открыть `/ai` → выбрать организацию (через выпадающий список вверху).
-4. Отправить «**Создай контрагента ООО Ромашка ИНН 7701234567**» → видеть action plan с одним действием `create_counterparty`, confidence ≈ 0.92.
-5. Нажать «Подтвердить» → видеть результат `Применено: 1` → проверить созданного контрагента в **Справочники → Контрагенты**.
-6. Отправить «**Создай счёт за консультацию 10000 рублей без НДС**» (контрагент должен быть в контексте — например тот, что только что создали) → видеть action plan с `create_invoice`, vatRate=`no_vat`.
-7. Нажать «Подтвердить» → проверить созданный счёт в **Документы → Счета**.
-8. В **AiAuditLog** появятся 2 записи (через Prisma Studio: `npx prisma studio`).
+4. Отправить «**Создай контрагента ООО Ромашка ИНН 7701234567**» → action plan с `create_counterparty`, confidence ≈ 0.92. Подтвердить.
+5. Отправить «**Создай счёт за консультацию 10000 рублей без НДС**» → action plan с `create_invoice`, vatRate=`no_vat`. Подтвердить → счёт появится в **Документы → Счета**.
+6. Отправить «**Создай акт по последнему счёту**» (Sprint 6B) → action plan с `create_act_from_invoice`. Подтвердить → акт появится в **Документы → Акты**. Повторная отправка вернёт ошибку «по счёту уже создан акт».
+7. Отправить «**Создай договор на оказание консультационных услуг**» (Sprint 6B) → action plan с `create_contract`. Подтвердить → договор появится в **Справочники → Договоры** (auto-number `Д-NNN/2026`).
+8. Отправить «**Покажи должников**» (Sprint 6B) → action plan с `analyze_debt`, помечено «не изменяет данные». Подтвердить → виден блок «Задолженность» с totalDebt / overdueDebt / списком должников / рекомендациями.
+9. В **AiAuditLog** должно появиться 5 записей (через `npx prisma studio` или прямой запрос): по одной на каждое подтверждённое действие. У `analyze_debt` `targetId=null`.
 
-### Sprint 6B (планируется отдельно — НЕ в Sprint 6A)
+### Что НЕ входит в Sprint 6A+6B (планируется отдельно)
 
-- `create_act`, `create_contract`, `create_payment`;
-- debt analysis: «топ 5 должников», «просроченные счета»;
-- AI-помощь в bank-import (автокатегоризация);
+- `create_payment`, `allocate_payment` — создание и разнесение оплат;
+- `update_invoice` / `update_contract` / `cancel_*` — редактирование документов;
+- AI-помощь в bank-import (автокатегоризация банковских транзакций);
 - streaming response от провайдера;
-- diff-view для update-actions.
+- diff-view для предлагаемых изменений;
+- multi-turn планы (последовательность связанных action в одном чате).
 
 ## Проверка печатных форм (Sprint 5.1)
 

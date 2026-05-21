@@ -210,10 +210,11 @@ export async function aiRoutes(app: FastifyInstance) {
     //    (это безопасно: всё равно executor проверит ownership).
     const promptContext = formatContextForPrompt(context);
     const cpHint = context.counterparties[0] ? `\nПодсказка для mock: counterpartyId="${context.counterparties[0].id}"` : "";
+    const invHint = context.recentInvoices[0] ? `\nПодсказка для mock: invoiceId="${context.recentInvoices[0].id}"` : "";
 
     const messages = [
       { role: "system" as const, content: FULL_SYSTEM_PROMPT },
-      { role: "system" as const, content: promptContext + cpHint },
+      { role: "system" as const, content: promptContext + cpHint + invHint },
       { role: "user" as const, content: message },
     ];
 

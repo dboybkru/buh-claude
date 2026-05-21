@@ -613,9 +613,9 @@ model AiAuditLog {
   userId         String
   organizationId String?
   actionPlanId   String?                                       // если запись возникла из ActionPlan
-  actionType     String                                        // "create_counterparty" / "create_invoice"
-  targetType     String                                        // "counterparty" / "invoice"
-  targetId       String                                        // id созданной сущности
+  actionType     String                                        // "create_counterparty" / "create_invoice" / "create_act_from_invoice" / "create_contract" / "analyze_debt"
+  targetType     String                                        // "counterparty" / "invoice" / "act" / "contract" / "analysis"
+  targetId       String?                                       // id созданной сущности; null для read-only action (analyze_debt)
   payloadJson    Json                                          // payload action — для трассировки
   createdAt      DateTime @default(now())
 

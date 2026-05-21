@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle } from "lucide-react";
+import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3 } from "lucide-react";
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +14,14 @@ import { Separator } from "@/components/ui/separator";
 
 /* ---------- types ---------- */
 
-type ActionType = "create_counterparty" | "create_invoice";
+type ActionType =
+  | "create_counterparty"
+  | "create_invoice"
+  | "create_act_from_invoice"
+  | "create_contract"
+  | "analyze_debt";
+
+type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis";
 
 interface CreateCounterpartyPayload {
   organizationId: string;
@@ -43,9 +50,54 @@ interface CreateInvoicePayload {
   note?: string | null;
 }
 
+interface CreateActFromInvoicePayload {
+  organizationId: string;
+  invoiceId: string;
+  date?: string | null;
+  note?: string | null;
+}
+
+interface CreateContractPayload {
+  organizationId: string;
+  counterpartyId: string;
+  templateId?: string | null;
+  number?: string | null;
+  date?: string | null;
+  subject: string;
+  amount?: number | null;
+  validUntil?: string | null;
+  terms?: string | null;
+}
+
+interface AnalyzeDebtPayload {
+  organizationId: string;
+  counterpartyId?: string | null;
+  asOfDate?: string | null;
+}
+
+interface DebtAnalysisCounterparty {
+  counterpartyId: string;
+  name: string;
+  debt: number;
+  overdueDebt: number;
+  unpaidInvoicesCount: number;
+  oldestOverdueDate: string | null;
+}
+
+interface DebtAnalysisResult {
+  totalDebt: number;
+  overdueDebt: number;
+  counterparties: DebtAnalysisCounterparty[];
+  recommendations: string[];
+  asOfDate: string;
+}
+
 type Action =
   | { id: string; type: "create_counterparty"; payload: CreateCounterpartyPayload }
-  | { id: string; type: "create_invoice"; payload: CreateInvoicePayload };
+  | { id: string; type: "create_invoice"; payload: CreateInvoicePayload }
+  | { id: string; type: "create_act_from_invoice"; payload: CreateActFromInvoicePayload }
+  | { id: string; type: "create_contract"; payload: CreateContractPayload }
+  | { id: string; type: "analyze_debt"; payload: AnalyzeDebtPayload };
 
 interface ActionPlan {
   intent: string;
@@ -65,8 +117,16 @@ interface ChatResponse {
   raw?: string;
 }
 
+interface AppliedActionResult {
+  id: string;
+  actionType: ActionType;
+  targetType: TargetType;
+  targetId: string | null;
+  result?: DebtAnalysisResult;
+}
+
 interface ConfirmResult {
-  applied: Array<{ id: string; actionType: ActionType; targetType: "counterparty" | "invoice"; targetId: string }>;
+  applied: AppliedActionResult[];
   skipped: Array<{ id: string; actionType: ActionType; reason: string }>;
   errors: Array<{ id: string; actionType: ActionType; error: string }>;
 }
@@ -137,9 +197,11 @@ export function AiChatPage() {
       if (okCount > 0 && errCount === 0) toast.success(`Применено: ${okCount}`);
       else if (errCount > 0) toast.error(`Применено: ${okCount}, ошибок: ${errCount}`);
       else toast(`Ничего не применено`);
-      // Инвалидация связанных запросов
+      // Инвалидация связанных запросов (Sprint 6A + 6B)
       qc.invalidateQueries({ queryKey: ["counterparties"] });
       qc.invalidateQueries({ queryKey: ["invoices"] });
+      qc.invalidateQueries({ queryKey: ["acts"] });
+      qc.invalidateQueries({ queryKey: ["contracts"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["cps-opts"] });
     } catch (err) {
@@ -192,7 +254,9 @@ export function AiChatPage() {
             {[
               "Создай контрагента ООО Ромашка ИНН 7701234567",
               "Создай счёт для контрагента на услугу консультации 10000 ₽ без НДС",
-              "Создай счёт на 50000 рублей за разработку",
+              "Создай акт по последнему счёту",
+              "Создай договор на оказание консультационных услуг",
+              "Покажи должников",
             ].map((s) => (
               <Button key={s} variant="outline" className="w-full justify-start" onClick={() => setInput(s)}>
                 {s}
@@ -329,29 +393,78 @@ function ActionPreview({ action }: { action: Action }) {
       </div>
     );
   }
+  if (action.type === "create_invoice") {
+    const p = action.payload;
+    const total = p.items.reduce((s, it) => s + it.quantity * it.price, 0);
+    return (
+      <div className="rounded-md border p-3 bg-muted/30 text-sm">
+        <div className="font-semibold flex items-center gap-1 text-xs mb-1">
+          <FileText className="h-3.5 w-3.5" /> Создание счёта
+        </div>
+        <div>Дата: <span className="font-mono">{p.date}</span> {p.dueDate ? <>, срок оплаты <span className="font-mono">{p.dueDate}</span></> : null}</div>
+        <div className="mt-1 font-medium">Позиции ({p.items.length}):</div>
+        <ul className="text-xs ml-3 space-y-0.5">
+          {p.items.map((it, i) => (
+            <li key={i}>
+              • {it.name} — {it.quantity} {it.unit} × {it.price} ₽ = {(it.quantity * it.price).toFixed(2)} ₽ (НДС: {it.vatRate === "no_vat" ? "без НДС" : `${it.vatRate}%`})
+            </li>
+          ))}
+        </ul>
+        <div className="mt-1">Итого: <span className="font-mono font-semibold">{total.toFixed(2)} ₽</span></div>
+        {p.note ? <div className="text-xs text-muted-foreground mt-1">Примечание: {p.note}</div> : null}
+      </div>
+    );
+  }
+  if (action.type === "create_act_from_invoice") {
+    const p = action.payload;
+    return (
+      <div className="rounded-md border p-3 bg-muted/30 text-sm">
+        <div className="font-semibold flex items-center gap-1 text-xs mb-1">
+          <FileCheck className="h-3.5 w-3.5" /> Создание акта на основании счёта
+        </div>
+        <div>Счёт: <span className="font-mono">{p.invoiceId}</span></div>
+        <div>Дата акта: <span className="font-mono">{p.date ?? "сегодня"}</span></div>
+        {p.note ? <div className="text-xs text-muted-foreground mt-1">Примечание: {p.note}</div> : null}
+        <div className="text-xs text-muted-foreground mt-1">Позиции и суммы будут скопированы из счёта.</div>
+      </div>
+    );
+  }
+  if (action.type === "create_contract") {
+    const p = action.payload;
+    return (
+      <div className="rounded-md border p-3 bg-muted/30 text-sm">
+        <div className="font-semibold flex items-center gap-1 text-xs mb-1">
+          <FileSignature className="h-3.5 w-3.5" /> Создание договора
+        </div>
+        <div>Контрагент: <span className="font-mono">{p.counterpartyId}</span></div>
+        <div>Предмет: <span className="font-medium">{p.subject}</span></div>
+        {p.amount != null ? <div>Сумма: <span className="font-mono">{p.amount.toFixed(2)} ₽</span></div> : null}
+        {p.date ? <div>Дата: <span className="font-mono">{p.date}</span></div> : null}
+        {p.validUntil ? <div>Срок действия до: <span className="font-mono">{p.validUntil}</span></div> : null}
+        {p.templateId ? <div>Шаблон: <span className="font-mono text-xs">{p.templateId}</span></div> : <div className="text-xs text-muted-foreground">Шаблон не задан — будет использован default или поле «Описание»</div>}
+        {p.number ? <div>Номер: <span className="font-mono">{p.number}</span></div> : <div className="text-xs text-muted-foreground">Номер будет сгенерирован автоматически</div>}
+        {p.terms ? <div className="text-xs text-muted-foreground mt-1">Условия: {p.terms}</div> : null}
+      </div>
+    );
+  }
+  // analyze_debt
   const p = action.payload;
-  const total = p.items.reduce((s, it) => s + it.quantity * it.price, 0);
   return (
     <div className="rounded-md border p-3 bg-muted/30 text-sm">
       <div className="font-semibold flex items-center gap-1 text-xs mb-1">
-        <FileText className="h-3.5 w-3.5" /> Создание счёта
+        <BarChart3 className="h-3.5 w-3.5" /> Анализ задолженности
+        <Badge variant="secondary" className="ml-2 text-[10px]">не изменяет данные</Badge>
       </div>
-      <div>Дата: <span className="font-mono">{p.date}</span> {p.dueDate ? <>, срок оплаты <span className="font-mono">{p.dueDate}</span></> : null}</div>
-      <div className="mt-1 font-medium">Позиции ({p.items.length}):</div>
-      <ul className="text-xs ml-3 space-y-0.5">
-        {p.items.map((it, i) => (
-          <li key={i}>
-            • {it.name} — {it.quantity} {it.unit} × {it.price} ₽ = {(it.quantity * it.price).toFixed(2)} ₽ (НДС: {it.vatRate === "no_vat" ? "без НДС" : `${it.vatRate}%`})
-          </li>
-        ))}
-      </ul>
-      <div className="mt-1">Итого: <span className="font-mono font-semibold">{total.toFixed(2)} ₽</span></div>
-      {p.note ? <div className="text-xs text-muted-foreground mt-1">Примечание: {p.note}</div> : null}
+      <div>
+        Область: {p.counterpartyId ? <>контрагент <span className="font-mono">{p.counterpartyId}</span></> : "вся организация (топ должников)"}
+      </div>
+      {p.asOfDate ? <div>На дату: <span className="font-mono">{p.asOfDate}</span></div> : null}
     </div>
   );
 }
 
 function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose: () => void }) {
+  const analysis = result.applied.find((a) => a.actionType === "analyze_debt" && a.result)?.result;
   return (
     <Card className={result.errors.length > 0 ? "border-destructive" : "border-emerald-600"}>
       <CardHeader>
@@ -363,11 +476,16 @@ function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose
             <div className="font-semibold text-emerald-700">✓ Применено ({result.applied.length}):</div>
             <ul className="ml-3 text-xs">
               {result.applied.map((a) => (
-                <li key={a.id}>• {labelFor(a.actionType)} → {a.targetType} id <span className="font-mono">{a.targetId}</span></li>
+                <li key={a.id}>
+                  • {labelFor(a.actionType)}
+                  {a.targetId ? <> → {a.targetType} id <span className="font-mono">{a.targetId}</span></> : <> → read-only</>}
+                </li>
               ))}
             </ul>
           </div>
         ) : null}
+
+        {analysis ? <DebtAnalysisBlock analysis={analysis} /> : null}
         {result.skipped.length > 0 ? (
           <div>
             <div className="font-semibold text-muted-foreground">⊘ Пропущено ({result.skipped.length}):</div>
@@ -391,6 +509,61 @@ function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose
 }
 
 function labelFor(t: ActionType): string {
-  if (t === "create_counterparty") return "Создание контрагента";
-  return "Создание счёта";
+  switch (t) {
+    case "create_counterparty": return "Создание контрагента";
+    case "create_invoice": return "Создание счёта";
+    case "create_act_from_invoice": return "Создание акта по счёту";
+    case "create_contract": return "Создание договора";
+    case "analyze_debt": return "Анализ задолженности";
+  }
+}
+
+function DebtAnalysisBlock({ analysis }: { analysis: DebtAnalysisResult }) {
+  return (
+    <div className="rounded-md border bg-sky-50 dark:bg-sky-950/30 p-3 mt-2">
+      <div className="text-sm font-semibold mb-2 flex items-center gap-2">
+        <BarChart3 className="h-4 w-4" /> Задолженность на {analysis.asOfDate}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+        <div>
+          <div className="text-muted-foreground">Общий долг</div>
+          <div className="font-mono font-semibold">{analysis.totalDebt.toFixed(2)} ₽</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Просрочено</div>
+          <div className={`font-mono font-semibold ${analysis.overdueDebt > 0 ? "text-destructive" : ""}`}>
+            {analysis.overdueDebt.toFixed(2)} ₽
+          </div>
+        </div>
+      </div>
+      {analysis.counterparties.length > 0 ? (
+        <>
+          <div className="text-xs font-semibold mt-2 mb-1">Должники ({analysis.counterparties.length}):</div>
+          <ul className="space-y-1 text-xs">
+            {analysis.counterparties.map((c) => (
+              <li key={c.counterpartyId} className="border-b border-sky-200 dark:border-sky-800 pb-1 last:border-0">
+                <span className="font-medium">{c.name}</span>
+                {" — "}
+                <span className="font-mono">{c.debt.toFixed(2)} ₽</span>
+                {c.overdueDebt > 0 ? (
+                  <span className="text-destructive"> (просрочено {c.overdueDebt.toFixed(2)} ₽ с {c.oldestOverdueDate})</span>
+                ) : null}
+                <span className="text-muted-foreground"> · {c.unpaidInvoicesCount} счёт(ов)</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="text-xs text-muted-foreground">Должников нет.</div>
+      )}
+      {analysis.recommendations.length > 0 ? (
+        <div className="mt-2 text-xs">
+          <div className="font-semibold">Рекомендации:</div>
+          <ul className="ml-3">
+            {analysis.recommendations.map((r, i) => <li key={i}>• {r}</li>)}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
 }

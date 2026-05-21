@@ -53,6 +53,57 @@ export const createInvoicePayloadSchema = z.object({
 });
 export type CreateInvoicePayload = z.infer<typeof createInvoicePayloadSchema>;
 
+/* ---------- Sprint 6B payloads ---------- */
+
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата ГГГГ-ММ-ДД");
+
+export const createActFromInvoicePayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  invoiceId: z.string().uuid(),
+  date: dateString.optional().nullable(),
+  note: z.string().max(2000).optional().nullable(),
+});
+export type CreateActFromInvoicePayload = z.infer<typeof createActFromInvoicePayloadSchema>;
+
+export const createContractPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  counterpartyId: z.string().uuid(),
+  templateId: z.string().uuid().optional().nullable(),
+  number: z.string().min(1).max(64).optional().nullable(),
+  date: dateString.optional().nullable(),
+  subject: z.string().min(1, "Предмет договора обязателен").max(2000),
+  amount: z.number().min(0).optional().nullable(),
+  validUntil: dateString.optional().nullable(),
+  terms: z.string().max(5000).optional().nullable(),
+});
+export type CreateContractPayload = z.infer<typeof createContractPayloadSchema>;
+
+export const analyzeDebtPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  counterpartyId: z.string().uuid().optional().nullable(),
+  asOfDate: dateString.optional().nullable(),
+});
+export type AnalyzeDebtPayload = z.infer<typeof analyzeDebtPayloadSchema>;
+
+/* ---------- analyze_debt result ---------- */
+
+export interface DebtAnalysisCounterparty {
+  counterpartyId: string;
+  name: string;
+  debt: number;
+  overdueDebt: number;
+  unpaidInvoicesCount: number;
+  oldestOverdueDate: string | null;
+}
+
+export interface DebtAnalysisResult {
+  totalDebt: number;
+  overdueDebt: number;
+  counterparties: DebtAnalysisCounterparty[];
+  recommendations: string[];
+  asOfDate: string;
+}
+
 /* ---------- action и план ---------- */
 
 export const actionSchema = z.discriminatedUnion("type", [
@@ -66,11 +117,40 @@ export const actionSchema = z.discriminatedUnion("type", [
     type: z.literal("create_invoice"),
     payload: createInvoicePayloadSchema,
   }),
+  // Sprint 6B
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("create_act_from_invoice"),
+    payload: createActFromInvoicePayloadSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("create_contract"),
+    payload: createContractPayloadSchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("analyze_debt"),
+    payload: analyzeDebtPayloadSchema,
+  }),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 export type ActionType = Action["type"];
 
-export const ALLOWED_ACTION_TYPES: ActionType[] = ["create_counterparty", "create_invoice"];
+export const ALLOWED_ACTION_TYPES: ActionType[] = [
+  "create_counterparty",
+  "create_invoice",
+  "create_act_from_invoice",
+  "create_contract",
+  "analyze_debt",
+];
+
+/** Read-only actions — не создают бизнес-сущности, только возвращают данные. */
+export const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt"];
+
+export function isReadOnlyAction(t: ActionType): boolean {
+  return READ_ONLY_ACTION_TYPES.includes(t);
+}
 
 export const actionPlanSchema = z.object({
   intent: z.string().min(1).max(500),
@@ -82,12 +162,17 @@ export const actionPlanSchema = z.object({
 });
 export type ActionPlan = z.infer<typeof actionPlanSchema>;
 
+export type TargetType = "counterparty" | "invoice" | "act" | "contract" | "analysis";
+
 /** Результат confirm — что применено, что пропущено, что упало. */
 export interface AppliedAction {
   id: string;
   actionType: ActionType;
-  targetType: "counterparty" | "invoice";
-  targetId: string;
+  targetType: TargetType;
+  /** null для read-only actions (analyze_debt) — у них нет созданной сущности. */
+  targetId: string | null;
+  /** Для analyze_debt — фактический результат анализа. Для других action остаётся undefined. */
+  result?: DebtAnalysisResult;
 }
 
 export interface SkippedAction {

@@ -1,4 +1,4 @@
-// Sprint 6A: безопасный executor для двух типов action.
+// Sprint 6A + 6B: безопасный executor для AI action.
 // Перед каждым действием — проверка owner / cross-organization.
 // Бизнес-логика повторно использует существующие helpers (numbering, document-items).
 
@@ -11,12 +11,20 @@ import {
   type Action,
   type AppliedAction,
   type FailedAction,
+  type TargetType,
   type CreateCounterpartyPayload,
   type CreateInvoicePayload,
+  type CreateActFromInvoicePayload,
+  type CreateContractPayload,
+  type AnalyzeDebtPayload,
+  type DebtAnalysisResult,
+  type DebtAnalysisCounterparty,
 } from "./schemas.js";
 
 /** Контракт ошибки executor — содержит сообщение и кодируется как FailedAction. */
 class ExecutorError extends Error {}
+
+/* ---------- ownership helpers ---------- */
 
 async function ensureOrganizationOwner(userId: string, organizationId: string): Promise<void> {
   const org = await prisma.organization.findFirst({
@@ -35,13 +43,23 @@ async function ensureCounterpartyOwner(userId: string, counterpartyId: string): 
   return cp;
 }
 
+/* ---------- executor result type ---------- */
+
+export interface ExecutorOutcome {
+  targetType: TargetType;
+  targetId: string | null;
+  result?: DebtAnalysisResult;
+}
+
+/* ---------- create_counterparty ---------- */
+
 async function executeCreateCounterparty(
   userId: string,
   payload: CreateCounterpartyPayload,
-): Promise<{ targetType: "counterparty"; targetId: string }> {
+): Promise<ExecutorOutcome> {
   await ensureOrganizationOwner(userId, payload.organizationId);
 
-  // Проверка: не пытаемся создать contractor с теми же реквизитами, что у организации пользователя
+  // Проверка: не пытаемся создать контрагента с теми же реквизитами, что у организации пользователя
   const ownOrg = await prisma.organization.findFirst({
     where: { userId, inn: payload.inn, ...(payload.kpp ? { kpp: payload.kpp } : {}) },
     select: { id: true },
@@ -72,17 +90,17 @@ async function executeCreateCounterparty(
   return { targetType: "counterparty", targetId: cp.id };
 }
 
+/* ---------- create_invoice ---------- */
+
 async function executeCreateInvoice(
   userId: string,
   payload: CreateInvoicePayload,
-): Promise<{ targetType: "invoice"; targetId: string }> {
+): Promise<ExecutorOutcome> {
   await ensureOrganizationOwner(userId, payload.organizationId);
-  const cp = await ensureCounterpartyOwner(userId, payload.counterpartyId);
-  void cp;
+  await ensureCounterpartyOwner(userId, payload.counterpartyId);
 
   if (payload.items.length === 0) throw new ExecutorError("Нужна хотя бы одна позиция");
 
-  // Конвертация AI-payload в формат existing prepareItems
   const itemsInput = payload.items.map((it, idx) => ({
     sortOrder: idx + 1,
     name: it.name,
@@ -97,7 +115,7 @@ async function executeCreateInvoice(
     customsDecl: null,
   }));
 
-  const vatIncluded = true; // соглашение: AI всегда работает в режиме «НДС включён в цену»
+  const vatIncluded = true;
   const { prepared, totals } = prepareItems(itemsInput, vatIncluded);
   const date = new Date(payload.date);
   const dueDate = payload.dueDate ? new Date(payload.dueDate) : null;
@@ -132,17 +150,258 @@ async function executeCreateInvoice(
   return { targetType: "invoice", targetId: result.id };
 }
 
-/** Выполняет один action и возвращает результат либо ошибку. */
-export async function executeAction(
+/* ---------- Sprint 6B: create_act_from_invoice ---------- */
+
+async function executeCreateActFromInvoice(
   userId: string,
-  action: Action,
-): Promise<{ targetType: "counterparty" | "invoice"; targetId: string }> {
+  payload: CreateActFromInvoicePayload,
+): Promise<ExecutorOutcome> {
+  await ensureOrganizationOwner(userId, payload.organizationId);
+
+  // Загружаем счёт с проверкой ownership и organizationId
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: payload.invoiceId, userId, organizationId: payload.organizationId },
+    include: { items: { orderBy: { sortOrder: "asc" } }, acts: { select: { id: true, number: true } } },
+  });
+  if (!invoice) throw new ExecutorError("Счёт не найден или принадлежит другому пользователю/организации");
+  if (invoice.status === "CANCELLED") throw new ExecutorError("Нельзя создать акт на основании отменённого счёта");
+  if (invoice.items.length === 0) throw new ExecutorError("В счёте нет позиций — акт создать невозможно");
+
+  // Защита от дубля: один акт на счёт
+  if (invoice.acts.length > 0) {
+    const exist = invoice.acts[0]!;
+    throw new ExecutorError(`По счёту ${invoice.number} уже создан акт ${exist.number} (id ${exist.id})`);
+  }
+
+  const date = payload.date ? new Date(payload.date) : new Date();
+  const year = date.getFullYear();
+
+  const created = await prisma.$transaction(async (tx) => {
+    const number = await nextDocumentNumber(tx, userId, payload.organizationId, "ACT", year);
+    const act = await tx.act.create({
+      data: {
+        userId,
+        organizationId: payload.organizationId,
+        counterpartyId: invoice.counterpartyId,
+        invoiceId: invoice.id,
+        contractId: invoice.contractId ?? null,
+        number,
+        date,
+        currency: invoice.currency,
+        status: "DRAFT",
+        vatRate: invoice.vatRate,
+        vatIncluded: invoice.vatIncluded,
+        subtotal: invoice.subtotal,
+        vatAmount: invoice.vatAmount,
+        total: invoice.total,
+        notes: payload.note ?? null,
+      },
+    });
+    // Копируем позиции из счёта в акт (с теми же суммами — totals уже посчитаны)
+    await tx.documentItem.createMany({
+      data: invoice.items.map((it, idx) => ({
+        userId,
+        documentType: "ACT" as const,
+        actId: act.id,
+        sortOrder: idx + 1,
+        nomenclatureId: it.nomenclatureId ?? null,
+        name: it.name,
+        unit: it.unit,
+        unitCode: it.unitCode,
+        quantity: it.quantity,
+        price: it.price,
+        vatRate: it.vatRate,
+        subtotal: it.subtotal,
+        vatAmount: it.vatAmount,
+        total: it.total,
+        countryCode: it.countryCode ?? null,
+        countryName: it.countryName ?? null,
+        customsDecl: it.customsDecl ?? null,
+      })),
+    });
+    return act;
+  });
+
+  return { targetType: "act", targetId: created.id };
+}
+
+/* ---------- Sprint 6B: create_contract ---------- */
+
+function nextContractNumber(prefix: string, count: number, year: number): string {
+  return `${prefix}-${String(count + 1).padStart(3, "0")}/${year}`;
+}
+
+async function executeCreateContract(
+  userId: string,
+  payload: CreateContractPayload,
+): Promise<ExecutorOutcome> {
+  await ensureOrganizationOwner(userId, payload.organizationId);
+  await ensureCounterpartyOwner(userId, payload.counterpartyId);
+
+  // template (если задан) должен принадлежать пользователю и (если указан) — нужной организации
+  let templateId: string | null = null;
+  if (payload.templateId) {
+    const tpl = await prisma.contractTemplate.findFirst({
+      where: { id: payload.templateId, userId },
+      select: { id: true, organizationId: true },
+    });
+    if (!tpl) throw new ExecutorError("Шаблон договора не найден или принадлежит другому пользователю");
+    if (tpl.organizationId && tpl.organizationId !== payload.organizationId) {
+      throw new ExecutorError("Шаблон договора принадлежит другой организации");
+    }
+    templateId = tpl.id;
+  } else {
+    // Если templateId не передан — пытаемся найти default-шаблон организации
+    const defaultTpl = await prisma.contractTemplate.findFirst({
+      where: {
+        userId,
+        isDefault: true,
+        OR: [{ organizationId: payload.organizationId }, { organizationId: null }],
+      },
+      orderBy: [{ organizationId: "desc" }], // приоритет — шаблон именно этой организации
+      select: { id: true },
+    });
+    templateId = defaultTpl?.id ?? null;
+  }
+
+  const date = payload.date ? new Date(payload.date) : new Date();
+  const year = date.getFullYear();
+
+  // Auto-number: D-NNN/YYYY (если не передан явный)
+  let number = payload.number?.trim() || null;
+  if (!number) {
+    const count = await prisma.contract.count({
+      where: {
+        userId,
+        organizationId: payload.organizationId,
+        // приблизительный подсчёт за текущий год — для номера. Уникальность гарантирует @@unique([userId, number]) — если коллизия, P2002 вернёт.
+        date: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    number = nextContractNumber("Д", count, year);
+  }
+
+  const expiryDate = payload.validUntil ? new Date(payload.validUntil) : null;
+  // Описание = пользовательские условия, если есть. Шаблон рендерится во вьюшке PDF/preview
+  // (lib/contract-template.ts), а не сохраняется отдельным полем — модель Contract этого не предусматривает.
+  const description = payload.terms ?? null;
+
+  const contract = await prisma.contract.create({
+    data: {
+      userId,
+      organizationId: payload.organizationId,
+      counterpartyId: payload.counterpartyId,
+      templateId,
+      number,
+      date,
+      expiryDate,
+      subject: payload.subject,
+      amount: payload.amount ?? null,
+      currency: "RUB",
+      status: "ACTIVE",
+      autoRenew: false,
+      description,
+    },
+  });
+  return { targetType: "contract", targetId: contract.id };
+}
+
+/* ---------- Sprint 6B: analyze_debt (read-only) ---------- */
+
+async function executeAnalyzeDebt(userId: string, payload: AnalyzeDebtPayload): Promise<ExecutorOutcome> {
+  await ensureOrganizationOwner(userId, payload.organizationId);
+  if (payload.counterpartyId) await ensureCounterpartyOwner(userId, payload.counterpartyId);
+
+  const asOfDate = payload.asOfDate ? new Date(payload.asOfDate) : new Date();
+
+  // Загружаем неоплаченные/просроченные счета в области (опц. по контрагенту)
+  const invoiceWhere: Prisma.InvoiceWhereInput = {
+    userId,
+    organizationId: payload.organizationId,
+    status: { in: ["DRAFT", "SENT", "PARTIALLY_PAID", "OVERDUE"] },
+    ...(payload.counterpartyId ? { counterpartyId: payload.counterpartyId } : {}),
+  };
+  const invoices = await prisma.invoice.findMany({
+    where: invoiceWhere,
+    include: {
+      counterparty: { select: { id: true, name: true } },
+      allocations: { select: { amount: true } },
+    },
+    orderBy: [{ counterpartyId: "asc" }, { date: "asc" }],
+  });
+
+  // Группируем по контрагенту
+  const map = new Map<string, DebtAnalysisCounterparty>();
+  for (const inv of invoices) {
+    const total = Number(inv.total);
+    const paid = inv.allocations.reduce((s, a) => s + Number(a.amount), 0);
+    const debt = Math.max(0, total - paid);
+    if (debt <= 0.005) continue; // полностью оплаченные пропускаем
+
+    const isOverdue = inv.dueDate && inv.dueDate < asOfDate;
+    const entry = map.get(inv.counterpartyId) ?? {
+      counterpartyId: inv.counterpartyId,
+      name: inv.counterparty.name,
+      debt: 0,
+      overdueDebt: 0,
+      unpaidInvoicesCount: 0,
+      oldestOverdueDate: null as string | null,
+    };
+    entry.debt = Math.round((entry.debt + debt) * 100) / 100;
+    if (isOverdue) {
+      entry.overdueDebt = Math.round((entry.overdueDebt + debt) * 100) / 100;
+      const dueIso = inv.dueDate!.toISOString().slice(0, 10);
+      if (!entry.oldestOverdueDate || dueIso < entry.oldestOverdueDate) {
+        entry.oldestOverdueDate = dueIso;
+      }
+    }
+    entry.unpaidInvoicesCount += 1;
+    map.set(inv.counterpartyId, entry);
+  }
+
+  const counterparties = [...map.values()].sort((a, b) => b.debt - a.debt);
+  const totalDebt = Math.round(counterparties.reduce((s, c) => s + c.debt, 0) * 100) / 100;
+  const overdueDebt = Math.round(counterparties.reduce((s, c) => s + c.overdueDebt, 0) * 100) / 100;
+
+  // Detereministic рекомендации (без галлюцинаций)
+  const recommendations: string[] = [];
+  if (counterparties.length === 0) {
+    recommendations.push("Должников нет на указанную дату — нет действий.");
+  } else {
+    recommendations.push("Связаться с контрагентами с наибольшей задолженностью.");
+    if (overdueDebt > 0) recommendations.push("Проверить просроченные счета и направить напоминания.");
+    if (counterparties.some((c) => c.overdueDebt > 0)) {
+      recommendations.push("Сформировать акт сверки с просроченными контрагентами.");
+    }
+  }
+
+  const result: DebtAnalysisResult = {
+    totalDebt,
+    overdueDebt,
+    counterparties: counterparties.slice(0, 20),
+    recommendations,
+    asOfDate: asOfDate.toISOString().slice(0, 10),
+  };
+
+  return { targetType: "analysis", targetId: null, result };
+}
+
+/* ---------- public entry ---------- */
+
+/** Выполняет один action и возвращает результат либо ошибку. */
+export async function executeAction(userId: string, action: Action): Promise<ExecutorOutcome> {
   try {
     switch (action.type) {
       case "create_counterparty":
         return await executeCreateCounterparty(userId, action.payload);
       case "create_invoice":
         return await executeCreateInvoice(userId, action.payload);
+      case "create_act_from_invoice":
+        return await executeCreateActFromInvoice(userId, action.payload);
+      case "create_contract":
+        return await executeCreateContract(userId, action.payload);
+      case "analyze_debt":
+        return await executeAnalyzeDebt(userId, action.payload);
     }
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -158,7 +417,13 @@ export function asFailedAction(action: Action, error: unknown): FailedAction {
   return { id: action.id, actionType: action.type, error: message };
 }
 
-/** Маркер: совпадает targetType с тем, что вернул executor. */
-export function toAppliedAction(action: Action, result: { targetType: "counterparty" | "invoice"; targetId: string }): AppliedAction {
-  return { id: action.id, actionType: action.type, targetType: result.targetType, targetId: result.targetId };
+/** Преобразует результат executor в AppliedAction. */
+export function toAppliedAction(action: Action, outcome: ExecutorOutcome): AppliedAction {
+  return {
+    id: action.id,
+    actionType: action.type,
+    targetType: outcome.targetType,
+    targetId: outcome.targetId,
+    ...(outcome.result ? { result: outcome.result } : {}),
+  };
 }

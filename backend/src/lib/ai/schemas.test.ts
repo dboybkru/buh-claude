@@ -86,7 +86,62 @@ describe("ai/schemas / actionPlanSchema", () => {
     expect(vatRateToNumber(22)).toBe(22);
   });
 
-  it("ALLOWED_ACTION_TYPES содержит ровно 2 значения", () => {
-    expect(ALLOWED_ACTION_TYPES).toEqual(["create_counterparty", "create_invoice"]);
+  it("ALLOWED_ACTION_TYPES (Sprint 6B) содержит ровно 5 значений", () => {
+    expect(ALLOWED_ACTION_TYPES).toEqual([
+      "create_counterparty",
+      "create_invoice",
+      "create_act_from_invoice",
+      "create_contract",
+      "analyze_debt",
+    ]);
+  });
+
+  // Sprint 6B schemas
+  it("create_act_from_invoice требует organizationId + invoiceId", () => {
+    const ok = actionSchema.safeParse({
+      id: "a", type: "create_act_from_invoice",
+      payload: { organizationId: ORG, invoiceId: "33333333-3333-4333-8333-333333333333", date: "2026-05-21" },
+    });
+    expect(ok.success).toBe(true);
+
+    const missingInvoice = actionSchema.safeParse({
+      id: "a", type: "create_act_from_invoice", payload: { organizationId: ORG },
+    });
+    expect(missingInvoice.success).toBe(false);
+  });
+
+  it("create_contract требует subject", () => {
+    const ok = actionSchema.safeParse({
+      id: "a", type: "create_contract",
+      payload: { organizationId: ORG, counterpartyId: CP, subject: "Оказание услуг" },
+    });
+    expect(ok.success).toBe(true);
+
+    const noSubject = actionSchema.safeParse({
+      id: "a", type: "create_contract", payload: { organizationId: ORG, counterpartyId: CP },
+    });
+    expect(noSubject.success).toBe(false);
+
+    const emptySubject = actionSchema.safeParse({
+      id: "a", type: "create_contract", payload: { organizationId: ORG, counterpartyId: CP, subject: "" },
+    });
+    expect(emptySubject.success).toBe(false);
+  });
+
+  it("analyze_debt — organizationId обязателен, counterpartyId опциональный", () => {
+    const onlyOrg = actionSchema.safeParse({
+      id: "a", type: "analyze_debt", payload: { organizationId: ORG },
+    });
+    expect(onlyOrg.success).toBe(true);
+
+    const withCp = actionSchema.safeParse({
+      id: "a", type: "analyze_debt", payload: { organizationId: ORG, counterpartyId: CP, asOfDate: "2026-05-21" },
+    });
+    expect(withCp.success).toBe(true);
+
+    const noOrg = actionSchema.safeParse({
+      id: "a", type: "analyze_debt", payload: {},
+    });
+    expect(noOrg.success).toBe(false);
   });
 });
