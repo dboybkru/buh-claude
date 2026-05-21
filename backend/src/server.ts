@@ -19,6 +19,7 @@ import { paymentsRoutes } from "./routes/payments.js";
 import { reconciliationsRoutes } from "./routes/reconciliations.js";
 import { aiRoutes } from "./routes/ai.js";
 import { importsRoutes } from "./routes/imports.js";
+import { bankImportRoutes } from "./routes/bank-import.js";
 import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
 import { ZodError } from "zod";
 
@@ -99,6 +100,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(reconciliationsRoutes, { prefix: "/api/v1/reconciliations" });
   await app.register(aiRoutes, { prefix: "/api/v1/ai" });
   await app.register(importsRoutes, { prefix: "/api/v1/imports" });
+  await app.register(bankImportRoutes, { prefix: "/api/v1/bank-import" });
 
   return app;
 }

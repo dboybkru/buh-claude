@@ -111,6 +111,19 @@ describe("Smoke: страницы рендерятся", () => {
     renderPage(<ImportPage />);
     expect(screen.getByText("Импорт данных")).toBeTruthy();
   });
+
+  it("BankImportPage", async () => {
+    const { BankImportPage } = await import("@/pages/BankImport");
+    renderPage(<BankImportPage />);
+    // Заголовок страницы + форма загрузки (организация, файл) должны быть видны
+    expect(screen.getByText("Импорт банковской выписки")).toBeTruthy();
+    expect(screen.getByText("Загрузить выписку (CSV или XLSX)")).toBeTruthy();
+    // Кнопка "Предпросмотр" disabled пока файл/организация не выбраны — рендер не падает
+    const buttons = screen.getAllByRole("button");
+    const previewBtn = buttons.find((b) => /Предпросмотр/.test(b.textContent ?? ""));
+    expect(previewBtn).toBeTruthy();
+    expect((previewBtn as HTMLButtonElement).disabled).toBe(true);
+  });
 });
 
 describe("Smoke: тёмная тема", () => {

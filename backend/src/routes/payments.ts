@@ -5,6 +5,12 @@ import { prisma } from "../lib/prisma.js";
 import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { Errors } from "../lib/api-error.js";
 import { recalcInvoiceStatus } from "../lib/invoice-status.js";
+import {
+  createPaymentInTx,
+  normalizeAllocations,
+  validateAllocations,
+  round2,
+} from "../lib/payments-service.js";
 
 const directionEnum = z.enum(["IN", "OUT"]);
 const methodEnum = z.enum(["BANK", "CASH", "CARD", "OTHER"]);
@@ -35,107 +41,8 @@ const baseShape = {
 const createSchema = z.object(baseShape);
 const updateSchema = z.object(baseShape).partial();
 
-const EPS = 0.005;
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/**
- * Нормализуем вход: если переданы allocations — используем их; иначе если есть invoiceId
- * (legacy одиночное распределение) — превращаем в один allocation на всю сумму платежа.
- * Дубли invoiceId в allocations сливаем в один с суммой = сумме.
- */
-function normalizeAllocations(
-  allocations: Array<{ invoiceId: string; amount: number }> | undefined,
-  invoiceId: string | null | undefined,
-  amount: number,
-): Array<{ invoiceId: string; amount: number }> {
-  let list: Array<{ invoiceId: string; amount: number }>;
-  if (allocations && allocations.length > 0) list = allocations;
-  else if (invoiceId) list = [{ invoiceId, amount }];
-  else return [];
-
-  // Слияние дублей
-  const merged = new Map<string, number>();
-  for (const a of list) merged.set(a.invoiceId, round2((merged.get(a.invoiceId) ?? 0) + a.amount));
-  return Array.from(merged.entries()).map(([invoiceId, amount]) => ({ invoiceId, amount }));
-}
-
-/**
- * Проверка пакета аллокаций: все invoices существуют, принадлежат пользователю,
- * лежат в той же организации, том же контрагенте, не CANCELLED, не переплачиваются.
- * `excludePaymentId` — id текущего платежа (при PATCH/DELETE), его аллокации
- * не учитываем при подсчёте текущей оплаты.
- */
-async function validateAllocations(
-  tx: Prisma.TransactionClient,
-  params: {
-    userId: string;
-    organizationId: string;
-    counterpartyId: string | null | undefined;
-    direction: "IN" | "OUT";
-    paymentAmount: number;
-    allocations: Array<{ invoiceId: string; amount: number }>;
-    excludePaymentId?: string;
-  },
-): Promise<void> {
-  const { userId, organizationId, counterpartyId, direction, paymentAmount, allocations } = params;
-
-  if (allocations.length === 0) return;
-
-  if (direction === "OUT") {
-    throw Errors.validation("Исходящий платёж (OUT) не может закрывать наши счета");
-  }
-
-  const allocSum = round2(allocations.reduce((s, a) => s + a.amount, 0));
-  if (allocSum > paymentAmount + EPS) {
-    throw Errors.validation(
-      `Сумма распределения (${allocSum.toFixed(2)}) превышает сумму платежа (${paymentAmount.toFixed(2)})`,
-    );
-  }
-
-  const ids = allocations.map((a) => a.invoiceId);
-  const invoices = await tx.invoice.findMany({
-    where: { id: { in: ids }, userId },
-    select: {
-      id: true,
-      number: true,
-      organizationId: true,
-      counterpartyId: true,
-      status: true,
-      total: true,
-      allocations: {
-        where: params.excludePaymentId ? { paymentId: { not: params.excludePaymentId } } : {},
-        select: { amount: true },
-      },
-    },
-  });
-  if (invoices.length !== ids.length) {
-    throw Errors.validation("Один или несколько счетов не найдены");
-  }
-
-  for (const a of allocations) {
-    const inv = invoices.find((i) => i.id === a.invoiceId);
-    if (!inv) throw Errors.validation(`Счёт ${a.invoiceId} не найден`);
-    if (inv.organizationId !== organizationId) {
-      throw Errors.validation(`Счёт ${inv.number} принадлежит другой организации`);
-    }
-    if (counterpartyId != null && inv.counterpartyId !== counterpartyId) {
-      throw Errors.validation(`Счёт ${inv.number} принадлежит другому контрагенту`);
-    }
-    if (inv.status === "CANCELLED") {
-      throw Errors.validation(`Счёт ${inv.number} отменён, на него нельзя распределить платёж`);
-    }
-    const alreadyPaid = inv.allocations.reduce((s, x) => s + Number(x.amount), 0);
-    const total = Number(inv.total);
-    if (alreadyPaid + a.amount > total + EPS) {
-      const balance = round2(total - alreadyPaid);
-      throw Errors.validation(
-        `Нельзя распределить ${a.amount.toFixed(2)} на счёт ${inv.number}: остаток ${balance.toFixed(2)}`,
-      );
-    }
-  }
-}
+// Бизнес-логика (normalizeAllocations / validateAllocations / round2 / createPaymentInTx)
+// вынесена в lib/payments-service.ts — используется также модулем bank-import.
 
 /**
  * Подгружает каждый allocation детальной информацией о счёте (number, status, total,
@@ -279,49 +186,22 @@ export async function paymentsRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const data = parsed.data;
 
-    const org = await prisma.organization.findFirst({ where: { id: data.organizationId, userId } });
-    if (!org) throw Errors.validation("Организация не найдена");
-    if (data.counterpartyId) {
-      const cp = await prisma.counterparty.findFirst({ where: { id: data.counterpartyId, userId } });
-      if (!cp) throw Errors.validation("Контрагент не найден");
-    }
-
-    const allocations = normalizeAllocations(data.allocations, data.invoiceId, data.amount);
-
-    const result = await prisma.$transaction(async (tx) => {
-      await validateAllocations(tx, {
-        userId,
+    const result = await prisma.$transaction((tx) =>
+      createPaymentInTx(tx, userId, {
         organizationId: data.organizationId,
         counterpartyId: data.counterpartyId ?? null,
+        bankAccountId: data.bankAccountId ?? null,
+        date: data.date,
+        amount: data.amount,
         direction: data.direction,
-        paymentAmount: data.amount,
-        allocations,
-      });
-
-      const payment = await tx.payment.create({
-        data: {
-          userId,
-          organizationId: data.organizationId,
-          counterpartyId: data.counterpartyId ?? null,
-          bankAccountId: data.bankAccountId ?? null,
-          date: new Date(data.date),
-          amount: data.amount,
-          direction: data.direction,
-          method: data.method,
-          purpose: data.purpose ?? null,
-          reference: data.reference ?? null,
-          notes: data.notes ?? null,
-        },
-      });
-
-      if (allocations.length > 0) {
-        await tx.paymentAllocation.createMany({
-          data: allocations.map((a) => ({ paymentId: payment.id, invoiceId: a.invoiceId, amount: a.amount })),
-        });
-        for (const a of allocations) await recalcInvoiceStatus(tx, a.invoiceId);
-      }
-      return payment;
-    });
+        method: data.method,
+        purpose: data.purpose ?? null,
+        reference: data.reference ?? null,
+        notes: data.notes ?? null,
+        allocations: data.allocations,
+        invoiceId: data.invoiceId ?? null,
+      }),
+    );
 
     return reply.code(201).send(result);
   });

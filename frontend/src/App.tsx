@@ -20,6 +20,7 @@ import { ReconciliationsPage } from "@/pages/Reconciliations";
 import { AiSettingsPage } from "@/pages/AiSettings";
 import { AiChatPage } from "@/pages/AiChat";
 import { ImportPage } from "@/pages/Import";
+import { BankImportPage } from "@/pages/BankImport";
 import { Placeholder } from "@/pages/Placeholder";
 
 const queryClient = new QueryClient({
@@ -49,6 +50,7 @@ export function App() {
 
                 <Route path="/payments" element={<PaymentsPage />} />
                 <Route path="/reconciliations" element={<ReconciliationsPage />} />
+                <Route path="/bank-import" element={<BankImportPage />} />
 
                 <Route path="/ai" element={<AiChatPage />} />
                 <Route path="/ai/settings" element={<AiSettingsPage />} />
