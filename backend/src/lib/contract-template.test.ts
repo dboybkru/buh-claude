@@ -32,6 +32,32 @@ describe("contract-template / renderTemplate", () => {
   });
 });
 
+describe("contract-template / unknown variables (Sprint 5.1)", () => {
+  it("шаблон без переменных: missing/unknown пустые", () => {
+    const r = renderTemplate("Просто текст без подстановок.", {});
+    expect(r.text).toBe("Просто текст без подстановок.");
+    expect(r.missing).toEqual([]);
+    expect(r.unknown).toEqual([]);
+    expect(r.variables).toEqual([]);
+  });
+  it("сочетание известной и неизвестной переменной: подстановка известной, оставление неизвестной + 2 списка", () => {
+    const r = renderTemplate("ИНН {{organization.inn}}, что-то {{foo.bar.baz}}", {
+      organization: { inn: "7707083893" },
+    });
+    expect(r.text).toContain("ИНН 7707083893");
+    expect(r.text).toContain("{{foo.bar.baz}}"); // unknown оставлен как есть
+    expect(r.unknown).toEqual(["foo.bar.baz"]);
+    // unknown также не имеет значения → попадает и в missing
+    expect(r.missing).toEqual(["foo.bar.baz"]);
+  });
+  it("длинный текст с десятками переменных не падает", () => {
+    const text = Array.from({ length: 200 }, (_, i) => `Раздел ${i + 1}: {{organization.inn}}`).join("\n");
+    const r = renderTemplate(text, { organization: { inn: "1234567890" } });
+    expect(r.text).not.toContain("{{organization.inn}}");
+    expect(r.missing).toEqual([]);
+  });
+});
+
 describe("contract-template / renderContract", () => {
   it("строит контекст и подставляет реквизиты", () => {
     const r = renderContract("Договор {{contract.number}} от {{contract.date}} с {{counterparty.fullName}} (ИНН {{counterparty.inn}})", {

@@ -309,6 +309,9 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
             onClose={() => setPreviewOpen(false)}
             previewUrl={`/api/v1/contracts/${contract!.id}/preview`}
             pdfUrl={`/api/v1/contracts/${contract!.id}/pdf`}
+            warningsUrl={`/contracts/${contract!.id}/print-warnings`}
+            organizationId={contract!.organizationId}
+            documentRoute={`/contracts`}
             fallbackName={`Договор-${contract!.number}.pdf`}
             title={`Договор ${contract!.number}`}
           />

@@ -43,7 +43,7 @@ export function InvoicePdf(props: InvoicePdfProps) {
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <HeaderStrip party={props.seller} flags={props.flags} assets={props.assets} />
+        <HeaderStrip party={props.seller} flags={props.flags} assets={props.assets} hideBankLine />
 
         {/* Реквизиты банка получателя — короткая верхняя плашка */}
         {props.flags.showBankDetails && props.seller.bik && props.seller.account ? (

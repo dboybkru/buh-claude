@@ -41,4 +41,22 @@ describe("amountToWords", () => {
     expect(amountToWords(0.25)).toContain("25 копеек");
     expect(amountToWords(0.11)).toContain("11 копеек");
   });
+
+  // Sprint 5.1: edge cases
+  it("отрицательное и NaN → пустая строка (без падения)", () => {
+    expect(amountToWords(-1)).toBe("");
+    expect(amountToWords(NaN)).toBe("");
+    expect(amountToWords("abc")).toBe("");
+  });
+
+  it("миллиарды (длинная сумма из акта сверки) не падают", () => {
+    const s = amountToWords(1_234_567_890.42);
+    expect(s).toMatch(/^Один миллиард/);
+    expect(s).toContain("42 копейки");
+  });
+
+  it("округление до 2 знаков (стресс-тест FP)", () => {
+    // Floating point: 0.1 + 0.2 = 0.30000000000000004 → копейки округляются до 30
+    expect(amountToWords(0.1 + 0.2)).toBe("Ноль рублей 30 копеек");
+  });
 });

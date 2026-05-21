@@ -1,6 +1,8 @@
 // Мапперы Prisma-сущностей в props для PDF-шаблонов.
 // Получают полный объект документа с `include: { organization: { include: { bankAccounts } }, counterparty, items, bankAccount }`.
 
+import fs from "node:fs";
+import path from "node:path";
 import type { PartyInfo, ItemRow, SellerAssets, PrintFlags } from "./templates/common.js";
 import { extractPrintSettings, type OrgPrintFields } from "../lib/print-settings.js";
 import { resolveSafeAssetPath } from "../lib/uploads.js";
@@ -100,11 +102,31 @@ export function mapFlags(org: Partial<OrgPrintFields> | null | undefined): Print
   };
 }
 
-/** Абсолютные пути к файлам подписи/печати/логотипа (для @react-pdf Image src). */
+/** data:image/...;base64,... URL'ы для подписи/печати/логотипа.
+ *  @react-pdf 4.x в node-среде корректно работает с data-URL, но не с
+ *  абсолютными Windows-путями и не с file:// URL — поэтому читаем файл и
+ *  инлайним base64. Файлы небольшие (до 5 MB по uploads-лимиту), так что
+ *  IO не критично — это вызывается один раз на PDF, и только если файл задан. */
 export function mapAssets(org: OrgFull, userId: string): SellerAssets {
+  const toDataUrl = (rel: string | null | undefined): string | null => {
+    if (!rel) return null;
+    const abs = resolveSafeAssetPath(userId, rel);
+    if (!abs) return null;
+    try {
+      const buf = fs.readFileSync(abs);
+      const ext = path.extname(abs).toLowerCase();
+      const mime = ext === ".png" ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg"
+        : ext === ".webp" ? "image/webp"
+        : "application/octet-stream";
+      return `data:${mime};base64,${buf.toString("base64")}`;
+    } catch {
+      return null;
+    }
+  };
   return {
-    logoPath: org.logo ? resolveSafeAssetPath(userId, org.logo) : null,
-    stampPath: org.stamp ? resolveSafeAssetPath(userId, org.stamp) : null,
-    signaturePath: org.signature ? resolveSafeAssetPath(userId, org.signature) : null,
+    logoPath: toDataUrl(org.logo),
+    stampPath: toDataUrl(org.stamp),
+    signaturePath: toDataUrl(org.signature),
   };
 }

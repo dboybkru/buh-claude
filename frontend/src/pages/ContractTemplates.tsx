@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, Edit, FileSignature } from "lucide-react";
@@ -132,6 +132,7 @@ function TplDialog({ template, onClose, onSaved }: { template: ContractTemplate 
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [missing, setMissing] = useState<string[]>([]);
   const [unknown, setUnknown] = useState<string[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const variablesQuery = useQuery({
     queryKey: ["template-variables"],
@@ -148,6 +149,26 @@ function TplDialog({ template, onClose, onSaved }: { template: ContractTemplate 
       setUnknown(r.data.unknown);
     } catch (err) {
       handleApiError(err);
+    }
+  }
+
+  function insertVariable(key: string) {
+    const ta = textareaRef.current;
+    const current = form.getValues("content") ?? "";
+    const placeholder = `{{${key}}}`;
+    if (ta && document.activeElement === ta) {
+      const start = ta.selectionStart ?? current.length;
+      const end = ta.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + placeholder + current.slice(end);
+      form.setValue("content", next, { shouldDirty: true });
+      // Восстановить курсор после вставки
+      requestAnimationFrame(() => {
+        ta.focus();
+        const pos = start + placeholder.length;
+        ta.setSelectionRange(pos, pos);
+      });
+    } else {
+      form.setValue("content", current + placeholder, { shouldDirty: true });
     }
   }
 
@@ -175,7 +196,15 @@ function TplDialog({ template, onClose, onSaved }: { template: ContractTemplate 
             <Input {...form.register("description")} />
           </FormField>
           <FormField label="Текст шаблона" error={form.formState.errors.content?.message}>
-            <Textarea {...form.register("content")} rows={14} className="font-mono text-xs" />
+            <Textarea
+              {...form.register("content")}
+              ref={(el) => {
+                form.register("content").ref(el);
+                textareaRef.current = el;
+              }}
+              rows={14}
+              className="font-mono text-xs"
+            />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...form.register("isDefault")} /> По умолчанию для новых договоров
@@ -184,12 +213,18 @@ function TplDialog({ template, onClose, onSaved }: { template: ContractTemplate 
           <Separator />
 
           <div className="rounded-md border p-3 space-y-2 text-xs">
-            <div className="font-semibold">Доступные переменные</div>
-            <div className="grid grid-cols-2 gap-y-1 gap-x-3">
+            <div className="font-semibold">Доступные переменные — клик вставляет в текст шаблона</div>
+            <div className="grid grid-cols-2 gap-y-1.5 gap-x-3">
               {variablesQuery.data?.map((v) => (
-                <div key={v.key}>
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => insertVariable(v.key)}
+                  className="text-left rounded px-1.5 py-0.5 hover:bg-muted/50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+                  title={`Вставить {{${v.key}}} в текст шаблона`}
+                >
                   <span className="font-mono">{`{{${v.key}}}`}</span> — <span className="text-muted-foreground">{v.description}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>

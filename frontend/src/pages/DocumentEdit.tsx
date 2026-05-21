@@ -9,7 +9,7 @@ import { handleApiError } from "@/lib/errors";
 import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { PdfPreviewDialog } from "@/components/PdfPreviewDialog";
 import { HtmlPreviewDialog } from "@/components/HtmlPreviewDialog";
-import { PrintWarnings } from "@/components/PrintWarnings";
+import { PrintWarnings, PrintWarningsBadge } from "@/components/PrintWarnings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -349,9 +349,14 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
           ) : null}
           {!isNew ? (
             <>
-              <Button variant="outline" onClick={() => setHtmlPreviewOpen(true)} aria-label="Превью HTML">
-                <Eye className="h-4 w-4" /> Превью
-              </Button>
+              <div className="relative inline-flex">
+                <Button variant="outline" onClick={() => setHtmlPreviewOpen(true)} aria-label="Превью HTML">
+                  <Eye className="h-4 w-4" /> Превью
+                </Button>
+                <span className="absolute -top-2 -right-2">
+                  <PrintWarningsBadge url={`${cfg.apiPath}/${id}/print-warnings`} />
+                </span>
+              </div>
               <Button variant="outline" onClick={() => setPreviewOpen(true)} aria-label="Превью PDF">
                 <FileText className="h-4 w-4" /> Превью PDF
               </Button>
@@ -548,7 +553,13 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
         </CardContent>
       </Card>
 
-      {!isNew ? <PrintWarnings url={`${cfg.apiPath}/${id}/print-warnings`} /> : null}
+      {!isNew ? (
+        <PrintWarnings
+          url={`${cfg.apiPath}/${id}/print-warnings`}
+          organizationId={state.organizationId}
+          documentRoute={`${cfg.routePath}/${id}`}
+        />
+      ) : null}
 
       <Card>
         <CardContent className="pt-6">
@@ -645,6 +656,9 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
             onClose={() => setHtmlPreviewOpen(false)}
             previewUrl={`/api/v1${cfg.apiPath}/${id}/preview`}
             pdfUrl={`/api/v1${cfg.apiPath}/${id}/pdf`}
+            warningsUrl={`${cfg.apiPath}/${id}/print-warnings`}
+            organizationId={state.organizationId}
+            documentRoute={`${cfg.routePath}/${id}`}
             fallbackName={`${cfg.titleSingular}-${state.number}.pdf`}
             title={`${cfg.titleSingular} ${state.number} — предпросмотр`}
           />

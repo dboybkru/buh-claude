@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "print:check": "tsx scripts/print-check.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

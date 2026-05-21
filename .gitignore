@@ -46,6 +46,9 @@ backend/prisma/dev.db*
 backend/tmp/
 backend/.cache/
 
+# Print-check artifacts (Sprint 5.1)
+tmp/
+
 # Docker
 postgres_data/
 pgadmin_data/

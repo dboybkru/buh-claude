@@ -98,15 +98,16 @@ npm run dev
 # Backend
 cd backend
 npm run typecheck          # tsc --noEmit
-npm run test:unit          # vitest unit (54 теста: validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads)
-npm run test:integration   # vitest integration (63 теста: auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings)
+npm run test:unit          # vitest unit (67 тестов: validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview)
+npm run test:integration   # vitest integration (66 тестов: auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings + stress-print)
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
+npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
 
 # Frontend
 cd frontend
 npm run typecheck          # tsc --noEmit (project references)
-npm test                   # vitest smoke (14 тестов: рендер 11 страниц + тёмная тема + PrintWarnings)
+npm test                   # vitest smoke (16 тестов: рендер 11 страниц + тёмная тема + PrintWarnings + HtmlPreviewDialog)
 npm run build              # tsc -b && vite build
 
 # Сразу всё из корня
@@ -199,6 +200,42 @@ npm run build          # production-сборка обоих
 - Маппинг колонок — базовый; парсер не подкалиброван под форматы конкретных банков (Сбер, Тинькофф, Альфа выгрузки могут потребовать ручного маппинга колонок в исходном файле).
 - Прямая интеграция с API банков **не реализована** — только импорт файла выгрузки.
 
+## Проверка печатных форм (Sprint 5.1)
+
+Sprint 5.1 добавил скрипт `print:check` для stress-генерации всех PDF и HTML предпросмотров на специально подготовленной длинной фикстуре — для ручной визуальной проверки качества печатных форм без необходимости поднимать БД и кликать в UI.
+
+```bash
+cd backend
+npm run print:check
+```
+
+Скрипт **не трогает БД**, рендерит 10 артефактов прямо в `tmp/print-check/` (папка в `.gitignore`):
+
+| Файл | Что проверить глазами |
+|---|---|
+| `invoice-one-page.pdf` | компактный счёт на одну позицию: шапка, реквизиты, банк, подписи + печать |
+| `invoice-many-items.pdf` | 17 позиций с длинными названиями: переносы по строкам, многостраничность, корректное продолжение шапки таблицы |
+| `invoice-no-vat.pdf` | «Без НДС (НК РФ ст. 145)», корректная сумма прописью |
+| `act.pdf` | смешанные ставки НДС (22% / 10% / 0%), период оказания услуг |
+| `upd.pdf` | landscape A4, шапка УПД, реквизиты, дата отгрузки, paymentDocRef |
+| `waybill.pdf` | ТОРГ-12 landscape, тип операции SALE, отпустил/получил |
+| `contract.pdf` | многостраничный договор по шаблону, реквизиты сторон, подпись со штампом |
+| `reconciliation.pdf` | акт сверки с 14 движениями: open/close сальдо, обороты |
+| `invoice-preview.html` | HTML-предпросмотр счёта (data-URL изображений inline — открывается без backend) |
+| `contract-preview.html` | HTML-предпросмотр договора с подстановками |
+
+**Что смотреть:**
+- кириллица не превратилась в `□□□` (PT Sans содержит всё нужное);
+- кавычки `«»`, № и тире — присутствуют;
+- сумма прописью корректна для разных ставок и сумм;
+- логотип не растянут (objectFit: contain, 64×64);
+- печать (rgba 180,30,30,200) не закрывает текст подписи (она с opacity 0.85 и position absolute right);
+- если печать/подпись не загружены — sigImageBox схлопывается и не оставляет пустой 40pt-слот.
+
+**Ограничения:**
+- Логотип/печать/подпись в тестовом скрипте — мини-PNG'и (120×60 / 160×160 / 200×60, без альфа-канала на печати); реальные сканы из uploads могут иметь иные пропорции — это видно сразу.
+- `@react-pdf/renderer` 4.x в node-среде корректно работает с изображениями только через `data:` URL — поэтому `pdf/map.ts:mapAssets` читает файл с диска и инлайнит base64 на каждый PDF. Для файлов до 5 MB (текущий лимит uploads) это не критично; для будущего S3-хранилища нужно вынести генерацию в воркер с кешированием.
+
 ## Соответствие нормативке РФ
 
 | Документ | Норма |
@@ -221,6 +258,7 @@ npm run build          # production-сборка обоих
 - **УПД и ТОРГ-12 — упрощённый MVP:** формы соблюдают приказ ФНС ММВ-7-15/820@ / постановление Госкомстата № 132 по составу полей, но **не являются строго гос. формами** для печати на бланках. Для отправки через ЭДО (Контур.Диадок / СБИС) нужна интеграция, которая пока не реализована.
 - **QR-код для оплаты на счёте — TODO.** Чекбокс «Показывать QR-код оплаты» в настройках печати оставляет место на странице, но кодогенерация ещё не реализована (нужно генерить по СБП-стандарту ST00012).
 - **DOCX-экспорт не реализован.** В Sprint 5 выбран HTML-preview как более лёгкий и универсальный путь (можно «Печать → Сохранить как PDF» из браузера для разовых исключений).
+- **@react-pdf 4.x и Image src (Sprint 5.1):** библиотека в node-среде корректно загружает изображения только из `data:` URL — не из абсолютных путей и не из `file://`. Поэтому `mapAssets` читает файл с диска и инлайнит base64 в каждый PDF (`backend/src/pdf/map.ts`). На больших файлах (>5 MB) это создаст memory pressure — текущий лимит uploads 5 MB этого не допускает, но при будущем S3 нужно вынести рендеринг в воркер.
 - **Бизнес-фичи в roadmap:** банковская выписка `1CClientBankExchange`, КУДиР + книги покупок/продаж, декларация НДС XML формата ФНС, ЭДО (Контур.Диадок / СБИС), e2e тесты Playwright.
 
 ## Лицензия

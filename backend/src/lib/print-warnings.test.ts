@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computePrintWarnings, hasErrors } from "./print-warnings.js";
+import { computePrintWarnings, hasErrors, countBySeverity } from "./print-warnings.js";
 
 const orgOk = {
   inn: "7707083893",
@@ -73,5 +73,20 @@ describe("print-warnings", () => {
       subject: null,
     });
     expect(w.find((x) => x.code === "contract.subject")).toBeDefined();
+  });
+
+  it("countBySeverity группирует и не пропускает severity без значений", () => {
+    const c1 = countBySeverity([]);
+    expect(c1).toEqual({ error: 0, warning: 0, info: 0 });
+
+    const w = computePrintWarnings({
+      kind: "invoice",
+      organization: null,
+      counterparty: null,
+      items: [],
+    });
+    const c2 = countBySeverity(w);
+    expect(c2.error).toBeGreaterThan(0);
+    expect(c2.error + c2.warning + c2.info).toBe(w.length);
   });
 });

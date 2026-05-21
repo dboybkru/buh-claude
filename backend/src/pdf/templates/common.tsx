@@ -158,20 +158,24 @@ export interface PrintFlags {
   showBankDetails: boolean;
 }
 
-/** Шапка с логотипом + кратким реквизитом продавца. */
+/** Шапка с логотипом + кратким реквизитом продавца.
+ *  `hideBankLine` — если документ отдельным блоком показывает банковские реквизиты
+ *  (например, в счёте), убираем дубль из шапки. */
 export function HeaderStrip({
   party,
   flags,
   assets,
+  hideBankLine,
 }: {
   party: PartyInfo;
   flags: PrintFlags;
   assets: SellerAssets;
+  hideBankLine?: boolean;
 }) {
-  const bankLine =
-    flags.showBankDetails && party.bik && party.account
-      ? `${party.bankName ?? ""}, БИК ${party.bik}, р/с ${party.account}${party.corrAccount ? ", к/с " + party.corrAccount : ""}`
-      : null;
+  const showBank = !hideBankLine && flags.showBankDetails && party.bik && party.account;
+  const bankLine = showBank
+    ? `${party.bankName ?? ""}, БИК ${party.bik}, р/с ${party.account}${party.corrAccount ? ", к/с " + party.corrAccount : ""}`
+    : null;
   return (
     <View style={styles.headerStrip}>
       {flags.showLogo && assets.logoPath ? (
@@ -190,7 +194,9 @@ export function HeaderStrip({
   );
 }
 
-/** Блок подписи с опциональной картинкой подписи и печати у левой колонки. */
+/** Блок подписи с опциональной картинкой подписи и печати у левой колонки.
+ *  Если ни печати, ни подписи нет — sigImageBox схлопывается, оставляя только
+ *  пустую строку подписи (а не пустое поле в 40pt). */
 export function SignaturesWithStamp({
   leftLabel,
   rightLabel,
@@ -210,18 +216,19 @@ export function SignaturesWithStamp({
   showAccountantColumn?: boolean;
 }) {
   const showRight = showAccountantColumn ?? flags.showAccountantSignature;
+  const hasSig = flags.showSignature && assets.signaturePath;
+  const hasStamp = flags.showStamp && assets.stampPath;
+  const hasAnyImage = hasSig || hasStamp;
   return (
     <View style={styles.signatureBlock}>
       <View style={styles.sigCol}>
         <Text style={styles.small}>{leftLabel}</Text>
-        <View style={styles.sigImageBox}>
-          {flags.showSignature && assets.signaturePath ? (
-            <Image style={styles.sigImage} src={assets.signaturePath} />
-          ) : null}
-          {flags.showStamp && assets.stampPath ? (
-            <Image style={styles.stampImage} src={assets.stampPath} />
-          ) : null}
-        </View>
+        {hasAnyImage ? (
+          <View style={styles.sigImageBox}>
+            {hasSig ? <Image style={styles.sigImage} src={assets.signaturePath!} /> : null}
+            {hasStamp ? <Image style={styles.stampImage} src={assets.stampPath!} /> : null}
+          </View>
+        ) : null}
         <View style={styles.sigLine} />
         <Text style={[styles.small, { textAlign: "center" }]}>
           {leftName ?? "(подпись, расшифровка)"}
@@ -230,7 +237,6 @@ export function SignaturesWithStamp({
       {showRight ? (
         <View style={styles.sigCol}>
           <Text style={styles.small}>{rightLabel}</Text>
-          <View style={[styles.sigImageBox, { height: 40 }]} />
           <View style={styles.sigLine} />
           <Text style={[styles.small, { textAlign: "center" }]}>
             {rightName ?? "(подпись, расшифровка)"}

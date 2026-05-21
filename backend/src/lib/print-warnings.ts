@@ -3,7 +3,16 @@
 
 import { extractPrintSettings, type OrgPrintFields } from "./print-settings.js";
 
-export type WarningSeverity = "error" | "warning";
+/**
+ * 3 уровня severity:
+ *  - error  : документ выглядит неполным и для отправки клиенту почти всегда нужны правки
+ *             (нет ИНН, нет позиций, нет контрагента/организации)
+ *  - warning: следует заполнить, но не блокирует отправку (нет КПП у юрлица, нет логотипа
+ *             при включённом showLogo, нет банка у счёта)
+ *  - info   : мягкая рекомендация (не используется в backend по умолчанию;
+ *             зарезервировано для UI и будущих расширений)
+ */
+export type WarningSeverity = "error" | "warning" | "info";
 
 export interface PrintWarning {
   code: string;
@@ -113,4 +122,15 @@ export function computePrintWarnings(input: ComputeWarningsInput): PrintWarning[
 
 export function hasErrors(warnings: PrintWarning[]): boolean {
   return warnings.some((w) => w.severity === "error");
+}
+
+/** Счётчики по severity — для бейджа в UI. */
+export function countBySeverity(warnings: PrintWarning[]): Record<WarningSeverity, number> {
+  return warnings.reduce<Record<WarningSeverity, number>>(
+    (acc, w) => {
+      acc[w.severity] = (acc[w.severity] ?? 0) + 1;
+      return acc;
+    },
+    { error: 0, warning: 0, info: 0 },
+  );
 }

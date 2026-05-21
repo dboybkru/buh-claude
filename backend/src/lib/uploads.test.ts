@@ -39,3 +39,39 @@ describe("uploads / limits", () => {
     expect(MAX_FILE_BYTES).toBe(5 * 1024 * 1024);
   });
 });
+
+// Sprint 5.1: mapAssets читает файл и возвращает data-URL — @react-pdf 4.x
+// корректно работает только с data: URI, не с file:// или абсолютным путём.
+describe("uploads + mapAssets / data URL", async () => {
+  const { mapAssets } = await import("../pdf/map.js");
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { uploadsRoot } = await import("./uploads.js");
+
+  it("mapAssets возвращает null для отсутствующего файла", () => {
+    const r = mapAssets({ logo: null, stamp: null, signature: null, inn: "x", name: "x" } as any, "u-none");
+    expect(r.logoPath).toBeNull();
+    expect(r.stampPath).toBeNull();
+    expect(r.signaturePath).toBeNull();
+  });
+
+  it("mapAssets возвращает data:image/png;base64 для существующего PNG", async () => {
+    const userId = "test-mapassets-user";
+    const orgId = "test-org";
+    const rel = `${userId}/${orgId}/logo.png`;
+    const abs = path.join(uploadsRoot(), userId, orgId, "logo.png");
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    // 1×1 прозрачный PNG (минимальный валидный)
+    const pngBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    await fs.writeFile(abs, pngBytes);
+    try {
+      const r = mapAssets({ logo: rel, inn: "x", name: "x" } as any, userId);
+      expect(r.logoPath).toMatch(/^data:image\/png;base64,/);
+    } finally {
+      await fs.rm(path.dirname(abs), { recursive: true, force: true });
+    }
+  });
+});

@@ -132,6 +132,27 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body).toBeTruthy();
   });
 
+  it("PrintWarningsBadge не падает при пустом ответе", async () => {
+    const { PrintWarningsBadge } = await import("@/components/PrintWarnings");
+    renderPage(<PrintWarningsBadge url="/invoices/x/print-warnings" />);
+    expect(document.body).toBeTruthy();
+  });
+
+  it("HtmlPreviewDialog рендерится (закрытый) без падения", async () => {
+    const { HtmlPreviewDialog } = await import("@/components/HtmlPreviewDialog");
+    renderPage(
+      <HtmlPreviewDialog
+        open={false}
+        onClose={() => {}}
+        previewUrl="/api/v1/invoices/x/preview"
+        pdfUrl="/api/v1/invoices/x/pdf"
+        fallbackName="x.pdf"
+        title="Тест"
+      />,
+    );
+    expect(document.body).toBeTruthy();
+  });
+
   it("BankImportPage", async () => {
     const { BankImportPage } = await import("@/pages/BankImport");
     renderPage(<BankImportPage />);
