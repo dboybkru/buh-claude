@@ -98,8 +98,8 @@ npm run dev
 # Backend
 cd backend
 npm run typecheck          # tsc --noEmit
-npm run test:unit          # vitest unit (114 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B+6C)
-npm run test:integration   # vitest integration (106 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1 + ai-sprint6c + ai-full-flow
+npm run test:unit          # vitest unit (121 тест): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B+6C) + env (Sprint 7)
+npm run test:integration   # vitest integration (110 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1 + ai-sprint6c + ai-full-flow + health (Sprint 7)
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
 npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
@@ -379,6 +379,93 @@ npm run print:check
 **Ограничения:**
 - Логотип/печать/подпись в тестовом скрипте — мини-PNG'и (120×60 / 160×160 / 200×60, без альфа-канала на печати); реальные сканы из uploads могут иметь иные пропорции — это видно сразу.
 - `@react-pdf/renderer` 4.x в node-среде корректно работает с изображениями только через `data:` URL — поэтому `pdf/map.ts:mapAssets` читает файл с диска и инлайнит base64 на каждый PDF. Для файлов до 5 MB (текущий лимит uploads) это не критично; для будущего S3-хранилища нужно вынести генерацию в воркер с кешированием.
+
+## Production hardening (Sprint 7)
+
+Sprint 7 подготовил проект к более реальной эксплуатации — без новых бизнес-фич, только устойчивость и диагностика.
+
+### Env validation
+
+`backend/src/lib/env.ts` строго валидирует переменные через Zod при старте. Полный список — см. `backend/.env.example`. Минимум обязательно:
+
+| Переменная | Описание |
+|---|---|
+| `DATABASE_URL`     | PostgreSQL connection string |
+| `JWT_SECRET`       | минимум **32 символа**; используется и для AES-256-GCM шифрования AI apiKey |
+| `NODE_ENV`         | `development \| test \| production` |
+| `PORT`             | дефолт 3001 |
+| `CORS_ORIGIN`      | список разрешённых origin через запятую |
+| `UPLOADS_DIR`      | путь к каталогу с логотипами / печатями / подписями |
+| `LOG_LEVEL`        | `fatal \| error \| warn \| info \| debug \| trace \| silent` |
+
+При невалидной конфигурации backend **не стартует** — выводит список ошибок без раскрытия фактических значений переменных.
+
+### Health checks
+
+| Endpoint | Что делает |
+|---|---|
+| `GET /api/v1/health` | публичный, без auth. Возвращает `status / version / uptimeSec / nodeEnv`. Подходит для liveness-проб. |
+| `GET /api/v1/ready`  | публичный. Проверяет БД (`SELECT 1`) и доступ к `uploads/`. Возвращает 200 при ok, **503** при degraded. Подходит для readiness-проб K8s и Docker healthcheck. |
+
+### Structured logging
+
+- Каждому запросу присваивается `requestId` (UUID v4), доступен в заголовке `x-request-id`.
+- В лог добавляются `userId` / `orgId` из JWT (если есть).
+- Pino `redact` маскирует чувствительные поля: `authorization`, `cookie`, `x-api-key`, `apiKey`, `password`, `passwordHash`, `token`, `jwt`, `secret`.
+- В production stack trace 500-ошибок остаётся только в server-side логах, клиенту возвращается сообщение «Внутренняя ошибка сервера».
+
+### Backup / restore
+
+Скрипты в `scripts/` для PowerShell и bash:
+
+```powershell
+# Windows / PowerShell
+pwsh scripts/backup-db.ps1               # backups/buhclaude-YYYY-MM-DD_HH-mm-ss.dump
+pwsh scripts/restore-db.ps1 -File backups/buhclaude-2026-05-22_12-00-00.dump
+```
+
+```bash
+# Linux / macOS
+./scripts/backup-db.sh
+./scripts/restore-db.sh backups/buhclaude-2026-05-22_12-00-00.dump
+```
+
+Папка `backups/` и файлы `*.dump`, `*.sql.gz` исключены из git. **Никогда не коммитьте дампы.**
+
+### Docker production profile
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+`docker-compose.prod.yml` добавляет backend service с healthcheck, volume для uploads, restart policy, убирает публичный порт postgres. Реальные значения секретов берутся из `backend/.env` (не в git).
+
+⚠ Dockerfile для backend пока не добавлен — секция в `docker-compose.prod.yml` помечена как нуждающаяся в `backend/Dockerfile`. Когда добавите — стандартный multi-stage Node 20-alpine + prisma generate + tsc.
+
+### Frontend resilience
+
+- **ErrorBoundary** (`frontend/src/components/ErrorBoundary.tsx`) ловит unhandled-исключения, показывает понятный fallback с кнопками «Перезагрузить» и «Попробовать снова». Технические детали — только в DEV.
+- **Code splitting**: главный chunk сжался с **716 KB до 410 KB** (gzip 133 KB) — vite-warning исчез. Каждая страница в отдельном bundle, грузится по требованию через `React.lazy + Suspense`.
+
+### Security review
+
+Полный чек-лист — **[docs/security-checklist.md](docs/security-checklist.md)** (10 разделов, статус каждого пункта). Известные пробелы для production:
+
+- ❌ rate-limit, CSP/helmet
+- ❌ 2FA
+- ❌ JWT_SECRET rotation plan
+- ❌ audit log retention
+- ⚠ encryption-at-rest для uploads (когда переедем на S3)
+
+### Troubleshooting
+
+| Симптом | Решение |
+|---|---|
+| Backend не стартует с ошибкой про env | См. вывод — выведено имя переменной и причина. Проверьте `backend/.env`. |
+| `npm run test:integration` падает с `database "buhclaude_test" does not exist` | См. раздел «Test database» выше — создайте `buhclaude_test` и накатите миграции. |
+| `print:check` молча генерит PDF без логотипа | Проверьте `pdf/map.ts:mapAssets` — должен возвращать `data:image/png;base64,...`, а не file path. См. Sprint 5.1 в `project-buhclaude-progress.md`. |
+| Frontend bundle > 500 KB | Sprint 7 — проверьте `vite build` output. Главный chunk должен быть ~410 KB. Если больше — кто-то импортировал тяжёлую библиотеку синхронно в `App.tsx`. |
+| `/api/v1/ready` возвращает 503 | Проверьте подключение к Postgres и существование `uploads/` каталога. |
 
 ## Соответствие нормативке РФ
 

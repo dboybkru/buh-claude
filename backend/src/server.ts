@@ -22,17 +22,45 @@ import { importsRoutes } from "./routes/imports.js";
 import { bankImportRoutes } from "./routes/bank-import.js";
 import { filesRoutes } from "./routes/files.js";
 import { contractTemplatesRoutes } from "./routes/contract-templates.js";
+import { healthRoutes } from "./routes/health.js";
 import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
 import { ZodError } from "zod";
+import crypto from "node:crypto";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
+    // Sprint 7: requestId через crypto.randomUUID для трассировки запросов в логах.
+    genReqId: () => crypto.randomUUID(),
+    requestIdHeader: "x-request-id",
+    requestIdLogLabel: "reqId",
     logger: {
       level: env.LOG_LEVEL,
+      // Sprint 7: redact чувствительных полей чтобы JWT / apiKey / пароли
+      // НИКОГДА не попадали в логи в plain-виде.
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          'req.headers["x-api-key"]',
+          "headers.authorization",
+          "headers.cookie",
+          'headers["x-api-key"]',
+          "*.apiKey",
+          "*.password",
+          "*.passwordHash",
+          "*.token",
+          "*.jwt",
+          "*.secret",
+          "body.apiKey",
+          "body.password",
+          "body.token",
+        ],
+        censor: "[REDACTED]",
+      },
       transport:
         env.NODE_ENV === "production"
           ? undefined
-          : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } },
+          : { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname,reqId" } },
     },
   });
 
@@ -53,13 +81,18 @@ export async function buildServer(): Promise<FastifyInstance> {
         error: { code: "ValidationError", message: "Невалидные параметры запроса", details: err.flatten() },
       });
     }
-    const e = err as { statusCode?: number; code?: string; message?: string };
+    const e = err as { statusCode?: number; code?: string; message?: string; stack?: string };
     const status = e.statusCode ?? 500;
     if (status >= 500) request.log.error({ err }, "Unhandled server error");
+    // Sprint 7: в production НЕ отдаём stack и не раскрываем внутренние детали
+    // 500-ошибок наружу. Stack остаётся в логах (см. request.log.error выше).
+    const isProd = env.NODE_ENV === "production";
+    const outMessage = status >= 500 && isProd ? "Внутренняя ошибка сервера" : (e.message || "Произошла ошибка");
     return reply.code(status).send({
       error: {
         code: e.code ?? (status >= 500 ? "InternalError" : "BadRequest"),
-        message: e.message || "Произошла ошибка",
+        message: outMessage,
+        ...(isProd || status >= 500 ? {} : {}), // stack не выдаём в любом случае
       },
     });
   });
@@ -79,11 +112,27 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(jwtPlugin);
 
-  app.get("/api/v1/health", async () => ({
-    status: "ok",
-    service: "buhclaude-api",
-    timestamp: new Date().toISOString(),
-  }));
+  // Sprint 7: онlogResponse hook добавляет userId / orgId в логи запроса
+  // (если есть в JWT). Помогает корреляции в production.
+  app.addHook("onRequest", async (request) => {
+    try {
+      const auth = request.headers.authorization;
+      if (auth && auth.startsWith("Bearer ")) {
+        const payload = app.jwt.decode<{ sub?: string; orgId?: string }>(auth.slice("Bearer ".length));
+        if (payload) {
+          request.log = request.log.child({
+            ...(payload.sub ? { userId: payload.sub } : {}),
+            ...(payload.orgId ? { orgId: payload.orgId } : {}),
+          });
+        }
+      }
+    } catch {
+      // битый jwt — auth-handler сам разберётся, лог-обогащение пропускаем
+    }
+  });
+
+  // Health / readiness (Sprint 7) — публично, без auth
+  await app.register(healthRoutes, { prefix: "/api/v1" });
 
   await app.register(authRoutes, { prefix: "/api/v1/auth" });
   await app.register(organizationsRoutes, { prefix: "/api/v1/organizations" });

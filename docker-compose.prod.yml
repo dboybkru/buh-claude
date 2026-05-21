@@ -1,0 +1,70 @@
+# BuhClaude — production-like docker-compose overlay (Sprint 7).
+#
+# Использование вместе с docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Что добавляет:
+#   - backend service (build + healthcheck + uploads volume + restart);
+#   - frontend как statically-built артефакт, отдаётся через nginx (опционально);
+#   - postgres без публичного порта (доступен только внутри сети).
+#
+# ВНИМАНИЕ: в этом файле НЕТ секретов. Реальные значения JWT_SECRET / POSTGRES_PASSWORD
+# / DADATA_API_KEY должны лежать в .env (исключённом из git) — Docker Compose
+# подхватит их через env_file.
+
+version: "3.8"
+
+services:
+  postgres:
+    # Переопределяем чтобы НЕ выставлять порт наружу в production.
+    ports: []
+    restart: always
+    # Healthcheck из основного compose уже задан; networks по умолчанию.
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile        # ⚠ Dockerfile пока не добавлен — см. README §«Docker production»
+    image: buhclaude-backend:latest
+    container_name: buhclaude-backend
+    env_file: backend/.env          # содержит DATABASE_URL, JWT_SECRET, CORS_ORIGIN, ...
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      # DATABASE_URL переопределяется на сервис-имя postgres внутри сети compose
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-buhclaude}:${POSTGRES_PASSWORD:-buhclaude_secret}@postgres:5432/${POSTGRES_DB:-buhclaude}?schema=public"
+    volumes:
+      - uploads_data:/app/uploads   # сохранение логотипа/печати/подписи между релизами
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/api/v1/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: always
+
+  # frontend как опциональный nginx со static dist
+  # Закомментировано по умолчанию — обычно frontend деплоится отдельно
+  # (Vercel / Cloudflare Pages / отдельный nginx).
+  #
+  # frontend:
+  #   image: nginx:1.27-alpine
+  #   container_name: buhclaude-frontend
+  #   volumes:
+  #     - ./frontend/dist:/usr/share/nginx/html:ro
+  #     - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  #   ports:
+  #     - "${FRONTEND_PORT:-8080}:80"
+  #   depends_on:
+  #     backend:
+  #       condition: service_healthy
+  #   restart: always
+
+volumes:
+  uploads_data:

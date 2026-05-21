@@ -148,6 +148,27 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body).toBeTruthy();
   });
 
+  it("ErrorBoundary показывает fallback при падении ребёнка (Sprint 7)", async () => {
+    const { ErrorBoundary } = await import("@/components/ErrorBoundary");
+    // Заглушаем console.error чтобы тест не шумел
+    const origError = console.error;
+    console.error = () => {};
+    try {
+      const Bomb = () => {
+        throw new Error("test-bomb");
+      };
+      renderPage(
+        <ErrorBoundary>
+          <Bomb />
+        </ErrorBoundary>,
+      );
+      expect(screen.getByText(/Что-то пошло не так/)).toBeTruthy();
+      expect(document.body.textContent).toMatch(/Перезагрузить/);
+    } finally {
+      console.error = origError;
+    }
+  });
+
   it("PrintWarningsBadge не падает при пустом ответе", async () => {
     const { PrintWarningsBadge } = await import("@/components/PrintWarnings");
     renderPage(<PrintWarningsBadge url="/invoices/x/print-warnings" />);

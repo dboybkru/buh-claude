@@ -49,6 +49,11 @@ backend/.cache/
 # Print-check artifacts (Sprint 5.1)
 tmp/
 
+# Database backups (Sprint 7) — НИКОГДА не коммитить дампы в git
+backups/
+*.dump
+*.sql.gz
+
 # Docker
 postgres_data/
 pgadmin_data/
