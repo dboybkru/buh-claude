@@ -93,17 +93,20 @@ describe("Smoke: страницы рендерятся", () => {
     expect(screen.getByText("Акты сверки")).toBeTruthy();
   });
 
-  it("AiSettingsPage", async () => {
+  it("AiSettingsPage (Sprint 6A)", async () => {
     const { AiSettingsPage } = await import("@/pages/AiSettings");
     renderPage(<AiSettingsPage />);
-    // В заголовке либо "AI Ассистент", либо "Загрузка..."
+    // В заголовке либо "AI Ассистент — настройки", либо "Загрузка..."
     expect(document.body.textContent).toMatch(/AI Ассистент|Загрузка/);
   });
 
-  it("AiChatPage", async () => {
+  it("AiChatPage (Sprint 6A)", async () => {
     const { AiChatPage } = await import("@/pages/AiChat");
     renderPage(<AiChatPage />);
     expect(screen.getByText("AI Ассистент")).toBeTruthy();
+    // Должны быть быстрые подсказки про создание контрагента и счёта
+    expect(document.body.textContent).toMatch(/Создай контрагента/);
+    expect(document.body.textContent).toMatch(/Создай счёт/);
   });
 
   it("ImportPage", async () => {

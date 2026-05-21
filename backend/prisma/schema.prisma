@@ -38,6 +38,8 @@ model User {
   payments       Payment[]
   reconciliations ReconciliationAct[]
   aiSettings     AiSettings?
+  aiActionPlans  AiActionPlan[]
+  aiAuditLogs    AiAuditLog[]
 
   @@index([email])
 }
@@ -553,17 +555,76 @@ enum ReconciliationStatus {
 model AiSettings {
   id          String   @id @default(uuid())
   userId      String   @unique
-  provider    String   @default("openai")        // openai / vsegpt / aitunnel / custom
+  provider    String   @default("openai")        // openai / vsegpt / aitunnel / custom / mock / local
   apiKey      String                              // зашифровано симметрично через env JWT_SECRET (см. lib/crypto)
   baseUrl     String   @default("https://api.openai.com/v1")
   model       String   @default("gpt-4o-mini")
   temperature Float    @default(0.2)
   maxTokens   Int      @default(2000)
-  enabled     Boolean  @default(true)
+  enabled     Boolean  @default(true)             // в API маппится как isEnabled
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// =============================================================================
+// AI ACTION PLAN (Sprint 6A)
+// Любой запрос пользователя к AI создаёт ActionPlan в статусе DRAFT.
+// AI не пишет бизнес-данные в БД сам — записи появляются только после
+// явного подтверждения пользователем через POST /action-plans/:id/confirm.
+// =============================================================================
+
+enum AiActionPlanStatus {
+  DRAFT       // план создан, ждёт подтверждения
+  CONFIRMED   // полностью или частично применён
+  FAILED      // выполнение упало (например, валидация)
+  EXPIRED     // план не был подтверждён в течение TTL — нельзя применять
+}
+
+model AiActionPlan {
+  id             String              @id @default(uuid())
+  userId         String
+  organizationId String?                                       // целевая организация (если применимо)
+  status         AiActionPlanStatus  @default(DRAFT)
+  message        String                                        // исходный пользовательский запрос
+  planJson       Json                                          // отрендеренный AI-план (см. lib/ai/schemas.ts:actionPlanSchema)
+  resultJson     Json?                                         // итог confirm (applied/skipped/errors)
+  createdAt      DateTime            @default(now())
+  confirmedAt    DateTime?
+  expiresAt      DateTime?
+
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditLogs      AiAuditLog[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+}
+
+// =============================================================================
+// AI AUDIT LOG (Sprint 6A)
+// Аудит подтверждённых AI-действий: какой план, какой action, какая сущность
+// создана/обновлена. Хранит payload (как было запрошено) и targetId.
+// =============================================================================
+
+model AiAuditLog {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String?
+  actionPlanId   String?                                       // если запись возникла из ActionPlan
+  actionType     String                                        // "create_counterparty" / "create_invoice"
+  targetType     String                                        // "counterparty" / "invoice"
+  targetId       String                                        // id созданной сущности
+  payloadJson    Json                                          // payload action — для трассировки
+  createdAt      DateTime @default(now())
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actionPlan AiActionPlan? @relation(fields: [actionPlanId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([actionPlanId])
 }
 
 // =============================================================================

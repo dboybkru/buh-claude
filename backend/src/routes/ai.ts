@@ -1,77 +1,145 @@
+// Sprint 6A: AI routes (полный flow).
+//
+// Endpoints:
+//   GET    /api/v1/ai/settings                          — настройки (apiKey маскирован)
+//   PUT    /api/v1/ai/settings                          — сохранить настройки
+//   POST   /api/v1/ai/test                              — проверка соединения с провайдером
+//   POST   /api/v1/ai/models                            — список доступных моделей
+//   POST   /api/v1/ai/chat                              — собрать контекст, дёрнуть AI, сохранить DRAFT plan
+//   POST   /api/v1/ai/action-plans/:id/confirm          — выполнить approved actions, записать audit log
+//
+// Принципы:
+//   - apiKey НИКОГДА не возвращается во frontend в чистом виде;
+//   - /chat не пишет бизнес-сущности — только создаёт ActionPlan со status DRAFT;
+//   - /confirm проверяет владельца, status, не выполняет повторно;
+//   - выполнение происходит через safe executor, кросс-orga запросы отклоняются.
+
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { Errors } from "../lib/api-error.js";
 import { encryptSecret, decryptSecret, maskSecret } from "../lib/crypto.js";
-import { chatCompletion, listModels, type AiConfig } from "../lib/ai-client.js";
-import { aiActionSchema, SYSTEM_PROMPT, type AiAction } from "../lib/ai-actions.js";
+
+import { createProvider, type AiProviderConfig } from "../lib/ai/providers/index.js";
+import { FULL_SYSTEM_PROMPT } from "../lib/ai/prompt.js";
+import { loadAiContext, formatContextForPrompt, type AiContextScope } from "../lib/ai/context-loader.js";
+import { parseActionPlan, selectApprovedActions } from "../lib/ai/action-plan.js";
+import { executeAction, asFailedAction, toAppliedAction } from "../lib/ai/executor.js";
+import type { ActionPlan, ConfirmResult, AppliedAction, FailedAction, SkippedAction } from "../lib/ai/schemas.js";
+
+/* ---------- schemas ---------- */
+
+const PROVIDER_KINDS = ["openai", "vsegpt", "aitunnel", "custom", "local", "mock"] as const;
 
 const settingsSchema = z.object({
-  provider: z.string().min(1).max(50),
-  apiKey: z.string().min(1).optional(),   // optional — при PUT можно не менять
+  provider: z.enum(PROVIDER_KINDS),
+  apiKey: z.string().min(1).optional(),
   baseUrl: z.string().url(),
   model: z.string().min(1),
   temperature: z.coerce.number().min(0).max(2).default(0.2),
   maxTokens: z.coerce.number().int().min(100).max(32000).default(2000),
-  enabled: z.boolean().default(true),
+  isEnabled: z.boolean().default(true),
 });
 
-async function loadConfig(userId: string): Promise<AiConfig | null> {
-  const s = await prisma.aiSettings.findUnique({ where: { userId } });
-  if (!s || !s.enabled) return null;
-  return {
-    apiKey: decryptSecret(s.apiKey),
-    baseUrl: s.baseUrl,
-    model: s.model,
-    temperature: s.temperature,
-    maxTokens: s.maxTokens,
-  };
+const chatSchema = z.object({
+  message: z.string().min(1).max(4000),
+  organizationId: z.string().uuid().optional().nullable(),
+  scope: z.enum(["global", "organization"]).default("global"),
+});
+
+const confirmSchema = z.object({
+  approvedActions: z.array(z.string()).optional(),
+});
+
+/* ---------- helpers ---------- */
+
+interface LoadedAiConfig {
+  provider: string;
+  cfg: AiProviderConfig;
 }
 
-export async function aiRoutes(app: FastifyInstance) {
-  app.addHook("onRequest", app.authenticate);
-
-  // Получить настройки (apiKey маскируется)
-  app.get("/settings", async (request) => {
-    const s = await prisma.aiSettings.findUnique({ where: { userId: request.user.sub } });
-    if (!s) {
-      return {
-        provider: "openai",
-        apiKey: "",
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o-mini",
-        temperature: 0.2,
-        maxTokens: 2000,
-        enabled: true,
-        configured: false,
-      };
-    }
-    return {
-      provider: s.provider,
-      apiKey: maskSecret(decryptSecret(s.apiKey)),
+async function loadAiConfig(userId: string): Promise<LoadedAiConfig | null> {
+  const s = await prisma.aiSettings.findUnique({ where: { userId } });
+  if (!s || !s.enabled) return null;
+  // Для mock-провайдера ключ не нужен, но в БД мы храним зашифрованную заглушку (mock-key)
+  const apiKey = s.provider === "mock" ? "mock-key" : decryptSecret(s.apiKey);
+  return {
+    provider: s.provider,
+    cfg: {
+      apiKey,
       baseUrl: s.baseUrl,
       model: s.model,
       temperature: s.temperature,
       maxTokens: s.maxTokens,
-      enabled: s.enabled,
-      configured: true,
-      updatedAt: s.updatedAt,
+    },
+  };
+}
+
+/** API-форма настроек: apiKey маскирован, поле называется isEnabled. */
+function serializeSettings(s: {
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  enabled: boolean;
+  updatedAt: Date;
+} | null) {
+  if (!s) {
+    return {
+      provider: "openai",
+      maskedApiKey: "",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      maxTokens: 2000,
+      isEnabled: true,
+      configured: false,
     };
+  }
+  const masked = s.provider === "mock" ? "(mock)" : maskSecret(decryptSecret(s.apiKey));
+  return {
+    provider: s.provider,
+    maskedApiKey: masked,
+    baseUrl: s.baseUrl,
+    model: s.model,
+    temperature: s.temperature,
+    maxTokens: s.maxTokens,
+    isEnabled: s.enabled,
+    configured: true,
+    updatedAt: s.updatedAt,
+  };
+}
+
+/* ---------- route plugin ---------- */
+
+export async function aiRoutes(app: FastifyInstance) {
+  app.addHook("onRequest", app.authenticate);
+
+  app.get("/settings", async (request) => {
+    const s = await prisma.aiSettings.findUnique({ where: { userId: request.user.sub } });
+    return serializeSettings(s);
   });
 
-  // Сохранить настройки (upsert). Если apiKey не передан или maskSecret вида "abc•••xyz" — оставляем старый.
   app.put("/settings", async (request) => {
     const parsed = settingsSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные настройки", parsed.error.flatten());
     const data = parsed.data;
     const existing = await prisma.aiSettings.findUnique({ where: { userId: request.user.sub } });
 
-    const apiKeyChanged = !!data.apiKey && !data.apiKey.includes("•");
-    const apiKeyToStore = apiKeyChanged
-      ? encryptSecret(data.apiKey!)
-      : existing?.apiKey ?? null;
-
-    if (!apiKeyToStore) throw Errors.validation("Укажите API-ключ");
+    // mock-провайдер хранит фиксированный плейсхолдер
+    let apiKeyToStore: string;
+    if (data.provider === "mock") {
+      apiKeyToStore = encryptSecret("mock-key");
+    } else {
+      const apiKeyChanged = !!data.apiKey && !data.apiKey.includes("•");
+      apiKeyToStore = apiKeyChanged
+        ? encryptSecret(data.apiKey!)
+        : existing?.apiKey ?? "";
+      if (!apiKeyToStore) throw Errors.validation("Укажите API-ключ");
+    }
 
     const saved = await prisma.aiSettings.upsert({
       where: { userId: request.user.sub },
@@ -83,7 +151,7 @@ export async function aiRoutes(app: FastifyInstance) {
         model: data.model,
         temperature: data.temperature,
         maxTokens: data.maxTokens,
-        enabled: data.enabled,
+        enabled: data.isEnabled,
       },
       update: {
         provider: data.provider,
@@ -92,202 +160,171 @@ export async function aiRoutes(app: FastifyInstance) {
         model: data.model,
         temperature: data.temperature,
         maxTokens: data.maxTokens,
-        enabled: data.enabled,
+        enabled: data.isEnabled,
       },
     });
-    return { ok: true, updatedAt: saved.updatedAt };
+    return serializeSettings(saved);
   });
 
-  // Тест соединения: краткий запрос модели
   app.post("/test", async (request) => {
-    const cfg = await loadConfig(request.user.sub);
-    if (!cfg) throw Errors.validation("Сначала сохраните настройки и включите AI");
+    const loaded = await loadAiConfig(request.user.sub);
+    if (!loaded) throw Errors.validation("AI не настроен — откройте /ai/settings");
+    const provider = createProvider(loaded.provider, loaded.cfg);
     try {
-      const r = await chatCompletion(cfg, [
+      const r = await provider.chat([
         { role: "system", content: "Reply with the single word: ok" },
         { role: "user", content: "ping" },
       ]);
-      return { ok: true, reply: r.text.slice(0, 200), usage: r.raw.usage };
+      return { ok: true, reply: r.text.slice(0, 200) };
     } catch (err) {
       throw Errors.validation((err as Error).message);
     }
   });
 
-  // Список доступных моделей
-  app.get("/models", async (request) => {
-    const cfg = await loadConfig(request.user.sub);
-    if (!cfg) throw Errors.validation("Сначала сохраните настройки и включите AI");
+  app.post("/models", async (request) => {
+    const loaded = await loadAiConfig(request.user.sub);
+    if (!loaded) throw Errors.validation("AI не настроен — откройте /ai/settings");
+    const provider = createProvider(loaded.provider, loaded.cfg);
     try {
-      const ids = await listModels(cfg);
-      return { models: ids };
+      return { models: await provider.listModels() };
     } catch (err) {
       throw Errors.validation((err as Error).message);
     }
   });
 
-  // Основная ручка для AI-ассистента: возвращает structured JSON action.
-  app.post("/chat", async (request) => {
-    const body = z.object({
-      message: z.string().min(1).max(4000),
-      history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).max(20).default([]),
-    }).parse(request.body);
+  /* -------------- chat: создать DRAFT action plan -------------- */
+  app.post("/chat", async (request, reply) => {
+    const parsed = chatSchema.safeParse(request.body);
+    if (!parsed.success) throw Errors.validation("Невалидные параметры", parsed.error.flatten());
+    const { message, organizationId, scope } = parsed.data;
+    const userId = request.user.sub;
 
-    const cfg = await loadConfig(request.user.sub);
-    if (!cfg) throw Errors.validation("AI не настроен. Откройте раздел AI → Настройки.");
+    const loaded = await loadAiConfig(userId);
+    if (!loaded) throw Errors.validation("AI не настроен — откройте /ai/settings");
+
+    // 1. Контекст
+    const context = await loadAiContext({ userId, organizationId: organizationId ?? null, scope: scope as AiContextScope });
+
+    // 2. Если в контексте нет выбранного counterparty, но MockAIProvider парсит counterpartyId
+    //    из system-prompt — добавим первого из списка контрагентов для удобства dev/test
+    //    (это безопасно: всё равно executor проверит ownership).
+    const promptContext = formatContextForPrompt(context);
+    const cpHint = context.counterparties[0] ? `\nПодсказка для mock: counterpartyId="${context.counterparties[0].id}"` : "";
 
     const messages = [
-      { role: "system" as const, content: SYSTEM_PROMPT },
-      ...body.history,
-      { role: "user" as const, content: body.message },
+      { role: "system" as const, content: FULL_SYSTEM_PROMPT },
+      { role: "system" as const, content: promptContext + cpHint },
+      { role: "user" as const, content: message },
     ];
 
-    let r;
+    const provider = createProvider(loaded.provider, loaded.cfg);
+    let raw: string;
     try {
-      r = await chatCompletion(cfg, messages, { responseFormat: "json_object" });
+      const r = await provider.chat(messages, { responseFormat: "json_object" });
+      raw = r.text;
     } catch (err) {
-      throw Errors.validation((err as Error).message);
+      throw Errors.validation(`AI provider error: ${(err as Error).message}`);
     }
 
-    // Парсим как JSON. Если модель вернула невалидно — возвращаем ошибку с raw.
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(r.text);
-    } catch {
-      return { action: { type: "answer" as const, payload: { text: r.text }, missingFields: [] }, raw: r.text };
+    // 3. Парсим план
+    const parsedPlan = parseActionPlan(raw);
+    if (!parsedPlan.ok || !parsedPlan.plan) {
+      // Возвращаем 200 с описанием — фронт покажет ошибку и raw-output для дебага
+      return reply.send({
+        actionPlanId: null,
+        error: parsedPlan.error,
+        raw: parsedPlan.raw,
+        actionPlan: null,
+        warnings: [],
+      });
     }
+    const plan: ActionPlan = parsedPlan.plan;
 
-    const action = aiActionSchema.safeParse(parsedJson);
-    if (!action.success) {
-      // Если структура не та — оборачиваем как "answer"
-      return {
-        action: { type: "answer" as const, payload: { text: r.text }, missingFields: [] },
-        raw: r.text,
-        parseError: action.error.flatten(),
-      };
-    }
-    return { action: action.data, raw: r.text, usage: r.raw.usage };
+    // 4. Сохраняем DRAFT
+    const saved = await prisma.aiActionPlan.create({
+      data: {
+        userId,
+        organizationId: organizationId ?? null,
+        status: "DRAFT",
+        message,
+        planJson: plan as unknown as Prisma.InputJsonValue,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h TTL
+      },
+    });
+
+    return {
+      actionPlanId: saved.id,
+      message: plan.summary,
+      actionPlan: plan,
+      warnings: plan.warnings,
+    };
   });
 
-  // Применить action (с подтверждением). MVP: пока только find_overdue_invoices
-  // и create_invoice (если все поля заполнены).
-  app.post("/apply", async (request) => {
-    const body = z.object({ action: aiActionSchema }).parse(request.body);
+  /* -------------- confirm: применить approved actions -------------- */
+  app.post("/action-plans/:id/confirm", async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const parsed = confirmSchema.safeParse(request.body ?? {});
+    if (!parsed.success) throw Errors.validation("Невалидные параметры", parsed.error.flatten());
     const userId = request.user.sub;
-    return applyAction(userId, body.action);
-  });
-}
 
-async function applyAction(userId: string, action: AiAction): Promise<unknown> {
-  switch (action.type) {
-    case "answer":
-      return { ok: true, result: { text: action.payload.text } };
-
-    case "find_overdue_invoices": {
-      const today = new Date();
-      const overdue = await prisma.invoice.findMany({
-        where: {
-          userId,
-          status: { in: ["DRAFT", "SENT", "PARTIALLY_PAID", "OVERDUE"] },
-          dueDate: { lt: today },
-        },
-        orderBy: { dueDate: "asc" },
-        include: { counterparty: { select: { name: true, inn: true } } },
-      });
-      return {
-        ok: true,
-        result: {
-          count: overdue.length,
-          invoices: overdue.map((i) => ({
-            id: i.id,
-            number: i.number,
-            dueDate: i.dueDate,
-            total: Number(i.total),
-            counterparty: i.counterparty.name,
-            inn: i.counterparty.inn,
-            status: i.status,
-          })),
-        },
-      };
+    const planRow = await prisma.aiActionPlan.findFirst({ where: { id, userId } });
+    if (!planRow) throw Errors.notFound("ActionPlan");
+    if (planRow.status !== "DRAFT") {
+      throw Errors.conflict(`ActionPlan уже в статусе ${planRow.status} — повторное применение запрещено`);
+    }
+    if (planRow.expiresAt && planRow.expiresAt < new Date()) {
+      await prisma.aiActionPlan.update({ where: { id }, data: { status: "EXPIRED" } });
+      throw Errors.conflict("Срок действия ActionPlan истёк");
     }
 
-    case "create_invoice": {
-      const p = action.payload;
-      // missingFields контракт: фронт ДОЛЖЕН был дозаполнить organizationId/counterpartyId перед apply
-      if (!p.organizationId) throw Errors.validation("Не указана организация");
-      let counterpartyId = p.counterpartyId;
-      if (!counterpartyId && p.counterpartyInn) {
-        const cp = await prisma.counterparty.findFirst({ where: { userId, inn: p.counterpartyInn } });
-        if (cp) counterpartyId = cp.id;
-      }
-      if (!counterpartyId) throw Errors.validation("Не указан контрагент (id или ИНН)");
-
-      // Простой пересчёт сумм (та же логика, что recalcAll на фронте)
-      const items = p.items.map((it, idx) => {
-        const qty = it.quantity, price = it.price, rate = it.vatRate;
-        let subtotal: number, vat: number, total: number;
-        if (p.vatIncluded) {
-          total = round2(qty * price);
-          vat = rate === 0 ? 0 : round2((total * rate) / (100 + rate));
-          subtotal = round2(total - vat);
-        } else {
-          subtotal = round2(qty * price);
-          vat = rate === 0 ? 0 : round2((subtotal * rate) / 100);
-          total = round2(subtotal + vat);
-        }
-        return { ...it, sortOrder: idx + 1, subtotal, vatAmount: vat, total };
+    const planJson = planRow.planJson as unknown;
+    const validated = parseActionPlan(JSON.stringify(planJson));
+    if (!validated.ok || !validated.plan) {
+      await prisma.aiActionPlan.update({
+        where: { id },
+        data: { status: "FAILED", resultJson: { error: validated.error } as unknown as Prisma.InputJsonValue },
       });
-      const docSubtotal = round2(items.reduce((s, x) => s + x.subtotal, 0));
-      const docVat = round2(items.reduce((s, x) => s + x.vatAmount, 0));
-      const docTotal = round2(items.reduce((s, x) => s + x.total, 0));
+      throw Errors.validation(`ActionPlan повреждён: ${validated.error ?? "?"}`);
+    }
 
-      const year = new Date().getFullYear();
-      const result = await prisma.$transaction(async (tx) => {
-        const counter = await tx.documentNumbering.upsert({
-          where: { userId_organizationId_docType_year: { userId, organizationId: p.organizationId!, docType: "INVOICE", year } },
-          create: { userId, organizationId: p.organizationId!, docType: "INVOICE", year, lastNumber: 1, prefix: "СЧ-" },
-          update: { lastNumber: { increment: 1 } },
-        });
-        const number = `${counter.prefix}${String(counter.lastNumber).padStart(4, "0")}/${year}`;
-        const inv = await tx.invoice.create({
+    const { approved, skipped: notApproved } = selectApprovedActions(validated.plan, parsed.data.approvedActions);
+
+    const applied: AppliedAction[] = [];
+    const errors: FailedAction[] = [];
+    const skipped: SkippedAction[] = notApproved;
+
+    for (const action of approved) {
+      try {
+        const res = await executeAction(userId, action);
+        const ap = toAppliedAction(action, res);
+        applied.push(ap);
+        await prisma.aiAuditLog.create({
           data: {
             userId,
-            organizationId: p.organizationId!,
-            counterpartyId: counterpartyId!,
-            number,
-            date: new Date(),
-            dueDate: p.dueDate ? new Date(p.dueDate) : null,
-            vatRate: p.vatRate,
-            vatIncluded: p.vatIncluded,
-            subtotal: docSubtotal,
-            vatAmount: docVat,
-            total: docTotal,
-            paymentPurpose: p.paymentPurpose ?? null,
+            organizationId: planRow.organizationId,
+            actionPlanId: planRow.id,
+            actionType: ap.actionType,
+            targetType: ap.targetType,
+            targetId: ap.targetId,
+            payloadJson: action.payload as unknown as Prisma.InputJsonValue,
           },
         });
-        await tx.documentItem.createMany({
-          data: items.map((it) => ({
-            userId,
-            documentType: "INVOICE" as const,
-            invoiceId: inv.id,
-            sortOrder: it.sortOrder,
-            name: it.name,
-            unit: it.unit,
-            unitCode: "796",
-            quantity: it.quantity,
-            price: it.price,
-            vatRate: it.vatRate,
-            subtotal: it.subtotal,
-            vatAmount: it.vatAmount,
-            total: it.total,
-          })),
-        });
-        return inv;
-      });
-      return { ok: true, result: { id: result.id, number: result.number, total: Number(result.total) } };
+      } catch (err) {
+        errors.push(asFailedAction(action, err));
+      }
     }
-  }
-}
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+    const result: ConfirmResult = { applied, skipped, errors };
+    const finalStatus = errors.length > 0 && applied.length === 0 ? "FAILED" : "CONFIRMED";
+    await prisma.aiActionPlan.update({
+      where: { id },
+      data: {
+        status: finalStatus,
+        confirmedAt: new Date(),
+        resultJson: result as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return result;
+  });
 }

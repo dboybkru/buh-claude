@@ -14,20 +14,22 @@ import { FormField } from "@/pages/Organizations";
 
 interface AiSettings {
   provider: string;
-  apiKey: string;
+  maskedApiKey: string;
   baseUrl: string;
   model: string;
   temperature: number;
   maxTokens: number;
-  enabled: boolean;
+  isEnabled: boolean;
   configured: boolean;
 }
 
-const PROVIDER_PRESETS: Record<string, { baseUrl: string; defaultModel: string; label: string }> = {
-  openai: { baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini", label: "OpenAI" },
-  vsegpt: { baseUrl: "https://api.vsegpt.ru/v1", defaultModel: "openai/gpt-4o-mini", label: "VseGPT" },
-  aitunnel: { baseUrl: "https://api.aitunnel.ru/v1", defaultModel: "gpt-4o-mini", label: "AITunnel" },
-  custom: { baseUrl: "http://localhost:11434/v1", defaultModel: "llama3.1", label: "Custom / Local" },
+const PROVIDER_PRESETS: Record<string, { baseUrl: string; defaultModel: string; label: string; description: string }> = {
+  openai:   { baseUrl: "https://api.openai.com/v1",     defaultModel: "gpt-4o-mini",        label: "OpenAI",          description: "Прямой доступ к OpenAI API. Нужен ключ sk-..." },
+  vsegpt:   { baseUrl: "https://api.vsegpt.ru/v1",      defaultModel: "openai/gpt-4o-mini", label: "VseGPT",          description: "Российский прокси к OpenAI/Anthropic/Google. Оплата в RUB." },
+  aitunnel: { baseUrl: "https://api.aitunnel.ru/v1",    defaultModel: "gpt-4o-mini",        label: "AITunnel",        description: "Российский прокси, оплата в RUB" },
+  custom:   { baseUrl: "https://api.example.com/v1",    defaultModel: "model-id",           label: "Custom",          description: "Любой OpenAI-совместимый endpoint" },
+  local:    { baseUrl: "http://localhost:11434/v1",     defaultModel: "llama3.1",           label: "Local (Ollama)",  description: "Локальная модель через Ollama / vLLM" },
+  mock:     { baseUrl: "mock://local",                  defaultModel: "mock-gpt-base",      label: "Mock (dev/test)", description: "Детерминированный mock-провайдер без обращения в сеть. Команды «создай контрагента ...» / «создай счёт ...»" },
 };
 
 export function AiSettingsPage() {
@@ -42,7 +44,7 @@ export function AiSettingsPage() {
   const [model, setModel] = useState(PROVIDER_PRESETS.openai!.defaultModel);
   const [temperature, setTemperature] = useState("0.2");
   const [maxTokens, setMaxTokens] = useState("2000");
-  const [enabled, setEnabled] = useState(true);
+  const [isEnabled, setIsEnabled] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -53,12 +55,12 @@ export function AiSettingsPage() {
   useEffect(() => {
     if (!data) return;
     setProvider(data.provider);
-    setApiKey(data.apiKey);
+    setApiKey(""); // не подставляем маску в input — пользователь либо вводит новый, либо оставляет пустым
     setBaseUrl(data.baseUrl);
     setModel(data.model);
     setTemperature(String(data.temperature));
     setMaxTokens(String(data.maxTokens));
-    setEnabled(data.enabled);
+    setIsEnabled(data.isEnabled);
   }, [data]);
 
   function onProviderChange(v: string) {
@@ -66,7 +68,7 @@ export function AiSettingsPage() {
     const preset = PROVIDER_PRESETS[v];
     if (preset) {
       setBaseUrl(preset.baseUrl);
-      if (!data?.configured) setModel(preset.defaultModel);
+      if (!data?.configured || data.provider !== v) setModel(preset.defaultModel);
     }
   }
 
@@ -79,12 +81,12 @@ export function AiSettingsPage() {
         model,
         temperature: parseFloat(temperature),
         maxTokens: parseInt(maxTokens),
-        enabled,
+        isEnabled,
       };
-      // Не отправляем замаскированный ключ обратно — только если изменили
       if (apiKey && !apiKey.includes("•")) payload.apiKey = apiKey;
       await api.put("/ai/settings", payload);
       toast.success("Настройки AI сохранены");
+      setApiKey("");
       refetch();
     } catch (err) {
       handleApiError(err);
@@ -98,8 +100,8 @@ export function AiSettingsPage() {
     setTestResult(null);
     try {
       const r = await api.post<{ ok: boolean; reply: string }>("/ai/test");
-      setTestResult("✓ " + r.data.reply);
-      toast.success("Соединение успешно");
+      setTestResult("✓ " + (r.data.reply || "ok"));
+      toast.success("Соединение установлено");
     } catch (err) {
       const e = err as { response?: { data?: { error?: { message?: string } } } };
       setTestResult("✗ " + (e.response?.data?.error?.message ?? "Ошибка"));
@@ -112,7 +114,7 @@ export function AiSettingsPage() {
   async function fetchModels() {
     setLoadingModels(true);
     try {
-      const r = await api.get<{ models: string[] }>("/ai/models");
+      const r = await api.post<{ models: string[] }>("/ai/models");
       setModels(r.data.models);
       toast.success(`Загружено моделей: ${r.data.models.length}`);
     } catch (err) {
@@ -126,11 +128,14 @@ export function AiSettingsPage() {
     return <div className="text-muted-foreground">Загрузка...</div>;
   }
 
+  const preset = PROVIDER_PRESETS[provider];
+  const isMock = provider === "mock";
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Bot className="h-6 w-6" /> AI Ассистент
+          <Bot className="h-6 w-6" /> AI Ассистент — настройки
         </h1>
         {data?.configured ? <Badge variant="success">Настроен</Badge> : <Badge variant="secondary">Не настроен</Badge>}
       </div>
@@ -138,10 +143,10 @@ export function AiSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <SettingsIcon className="h-4 w-4" /> Настройки провайдера
+            <SettingsIcon className="h-4 w-4" /> Провайдер
           </CardTitle>
           <CardDescription>
-            Совместимо с OpenAI API. Подходят OpenAI, VseGPT, AITunnel, локальные модели через Ollama или совместимые endpoint-ы.
+            Поддерживаются OpenAI-совместимые endpoint-ы. Mock-провайдер — для dev/test без внешней сети.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -155,9 +160,10 @@ export function AiSettingsPage() {
                   ))}
                 </SelectContent>
               </Select>
+              {preset ? <div className="text-xs text-muted-foreground mt-1">{preset.description}</div> : null}
             </FormField>
             <FormField label="Включить AI">
-              <Select value={enabled ? "on" : "off"} onValueChange={(v) => setEnabled(v === "on")}>
+              <Select value={isEnabled ? "on" : "off"} onValueChange={(v) => setIsEnabled(v === "on")}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="on">Да</SelectItem>
@@ -167,12 +173,27 @@ export function AiSettingsPage() {
             </FormField>
           </div>
 
-          <FormField label="API Key">
-            <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." autoComplete="off" />
-          </FormField>
+          {!isMock ? (
+            <FormField label="API Key">
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={data?.maskedApiKey ? `Текущий: ${data.maskedApiKey} (оставьте пустым, чтобы не менять)` : "sk-..."}
+                autoComplete="off"
+              />
+              <div className="text-xs text-muted-foreground mt-1">
+                Ключ хранится в БД зашифрованным (AES-256-GCM). На клиент возвращается только маска.
+              </div>
+            </FormField>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              Mock-провайдер не требует API-ключа.
+            </div>
+          )}
 
           <FormField label="Base URL">
-            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
+            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" disabled={isMock} />
           </FormField>
 
           <div className="grid grid-cols-2 gap-3">
@@ -187,11 +208,14 @@ export function AiSettingsPage() {
               ) : (
                 <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4o-mini" />
               )}
+              <div className="text-xs text-muted-foreground mt-1">
+                Если /models недоступен — введите название модели вручную.
+              </div>
             </FormField>
             <FormField label="Список моделей">
               <Button type="button" variant="outline" onClick={fetchModels} disabled={loadingModels || !data?.configured}>
                 {loadingModels ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Загрузить модели
+                Получить модели
               </Button>
             </FormField>
           </div>
@@ -207,23 +231,19 @@ export function AiSettingsPage() {
             </div>
           </div>
 
-          <div className="flex gap-2 pt-2">
+          <div className="flex gap-2 pt-2 flex-wrap">
             <Button onClick={save} disabled={saving}>
               {saving ? "Сохранение..." : "Сохранить"}
             </Button>
             <Button variant="outline" onClick={test} disabled={testing || !data?.configured}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Тест соединения
+              Проверить подключение
             </Button>
             {testResult ? (
               <span className={`text-sm self-center ${testResult.startsWith("✓") ? "text-emerald-700" : "text-destructive"}`}>
                 {testResult}
               </span>
             ) : null}
-          </div>
-
-          <div className="text-xs text-muted-foreground pt-2">
-            Ключ хранится в БД зашифрованным (AES-256-GCM с производным ключом от JWT_SECRET). На клиент отдаётся маскированный вид.
           </div>
         </CardContent>
       </Card>
