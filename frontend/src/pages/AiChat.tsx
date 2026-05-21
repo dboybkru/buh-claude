@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3, Wallet, ArrowDownToLine, ArrowUpFromLine, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -222,6 +222,8 @@ export function AiChatPage() {
     })).data.items,
     enabled: !!organizationId,
   });
+  // refetch для кнопки «Обновить» в AuditLogCard
+  const refetchAudit = auditLog.refetch;
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
@@ -363,7 +365,7 @@ export function AiChatPage() {
 
       {confirmResult ? <ConfirmResultCard result={confirmResult} onClose={reject} /> : null}
 
-      <AuditLogCard items={auditLog.data ?? []} loading={auditLog.isLoading} />
+      <AuditLogCard items={auditLog.data ?? []} loading={auditLog.isLoading} onRefresh={() => refetchAudit()} />
 
       <form onSubmit={send} className="flex gap-2 sticky bottom-0 bg-background py-3">
         <Textarea
@@ -625,58 +627,106 @@ function ActionPreview({ action }: { action: Action }) {
 }
 
 function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose: () => void }) {
-  const debtAnalysis = result.applied.find((a) => a.actionType === "analyze_debt" && a.result)?.result as
+  const writeApplied = result.applied.filter((a) => !READ_ONLY_ACTION_TYPES.includes(a.actionType));
+  const readOnlyApplied = result.applied.filter((a) => READ_ONLY_ACTION_TYPES.includes(a.actionType));
+  const debtAnalysis = readOnlyApplied.find((a) => a.actionType === "analyze_debt" && a.result)?.result as
     | DebtAnalysisResult | undefined;
-  const suggestion = result.applied.find((a) => a.actionType === "suggest_payment_allocations" && a.result)?.result as
+  const suggestion = readOnlyApplied.find((a) => a.actionType === "suggest_payment_allocations" && a.result)?.result as
     | PaymentSuggestionResult | undefined;
+
+  const hasOnlyReadOnly = writeApplied.length === 0 && readOnlyApplied.length > 0 && result.errors.length === 0;
+  const cardBorder = result.errors.length > 0
+    ? "border-destructive"
+    : hasOnlyReadOnly
+      ? "border-sky-600"
+      : writeApplied.length > 0
+        ? "border-emerald-600"
+        : "";
+
   return (
-    <Card className={result.errors.length > 0 ? "border-destructive" : "border-emerald-600"}>
+    <Card className={cardBorder}>
       <CardHeader>
-        <CardTitle className="text-base">Результат применения</CardTitle>
+        <CardTitle className="text-base">Результат выполнения</CardTitle>
+        {hasOnlyReadOnly ? (
+          <CardDescription className="text-sky-700 dark:text-sky-300">
+            Данные не изменялись — только анализ и предложения.
+          </CardDescription>
+        ) : writeApplied.length > 0 && result.errors.length === 0 ? (
+          <CardDescription className="text-emerald-700 dark:text-emerald-400">
+            Все действия применены успешно.
+          </CardDescription>
+        ) : result.errors.length > 0 ? (
+          <CardDescription className="text-destructive">
+            Часть действий не удалось применить — см. блок «Требует проверки» ниже.
+          </CardDescription>
+        ) : null}
       </CardHeader>
-      <CardContent className="space-y-2 text-sm">
-        {result.applied.length > 0 ? (
-          <div>
-            <div className="font-semibold text-emerald-700">✓ Применено ({result.applied.length}):</div>
-            <ul className="ml-3 text-xs space-y-0.5">
-              {result.applied.map((a) => (
+      <CardContent className="space-y-3 text-sm">
+
+        {/* Блок 1: «Что было создано» — write actions с ссылками */}
+        {writeApplied.length > 0 ? (
+          <div className="rounded-md border bg-emerald-50 dark:bg-emerald-950/30 p-2">
+            <div className="font-semibold text-emerald-800 dark:text-emerald-200 mb-1 flex items-center gap-2">
+              <Check className="h-4 w-4" /> Что было создано ({writeApplied.length})
+            </div>
+            <ul className="ml-1 text-xs space-y-0.5">
+              {writeApplied.map((a) => (
                 <li key={a.id}>
                   • {labelFor(a.actionType)}
                   {a.targetId ? (
                     <>
                       {" → "}
-                      <Link to={routeFor(a.targetType, a.targetId)} className="underline underline-offset-2 hover:no-underline">
+                      <Link to={routeFor(a.targetType, a.targetId)} className="underline underline-offset-2 hover:no-underline font-medium">
                         Открыть {labelForTarget(a.targetType)}
                       </Link>
                       <span className="text-muted-foreground"> (id <span className="font-mono">{a.targetId.slice(0, 8)}…</span>)</span>
                     </>
-                  ) : (
-                    <> → <span className="text-muted-foreground">read-only (без созданной сущности)</span></>
-                  )}
+                  ) : null}
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
 
-        {debtAnalysis ? <DebtAnalysisBlock analysis={debtAnalysis} /> : null}
-        {suggestion ? <PaymentSuggestionBlock suggestion={suggestion} /> : null}
-        {result.skipped.length > 0 ? (
-          <div>
-            <div className="font-semibold text-muted-foreground">⊘ Пропущено ({result.skipped.length}):</div>
-            <ul className="ml-3 text-xs">
-              {result.skipped.map((s) => <li key={s.id}>• {labelFor(s.actionType)} — {s.reason}</li>)}
-            </ul>
+        {/* Блок 2: «Результат анализа» — read-only actions */}
+        {readOnlyApplied.length > 0 ? (
+          <div className="rounded-md border bg-sky-50 dark:bg-sky-950/30 p-2 space-y-2">
+            <div className="font-semibold text-sky-800 dark:text-sky-200 flex items-center gap-2">
+              <BarChart3 className="h-4 w-4" /> Результат анализа ({readOnlyApplied.length})
+              <Badge variant="secondary" className="text-[10px]">данные не изменялись</Badge>
+            </div>
+            {debtAnalysis ? <DebtAnalysisBlock analysis={debtAnalysis} /> : null}
+            {suggestion ? <PaymentSuggestionBlock suggestion={suggestion} /> : null}
           </div>
         ) : null}
+
+        {/* Блок 3: «Требует проверки» — errors */}
         {result.errors.length > 0 ? (
-          <div>
-            <div className="font-semibold text-destructive">✗ Ошибки ({result.errors.length}):</div>
-            <ul className="ml-3 text-xs">
-              {result.errors.map((e) => <li key={e.id}>• {labelFor(e.actionType)} — {e.error}</li>)}
+          <div className="rounded-md border bg-red-50 dark:bg-red-950/30 p-2">
+            <div className="font-semibold text-destructive mb-1 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" /> Требует проверки ({result.errors.length})
+            </div>
+            <ul className="ml-1 text-xs space-y-0.5">
+              {result.errors.map((e) => (
+                <li key={e.id}>
+                  <span className="font-medium">{labelFor(e.actionType)}:</span> {e.error}
+                </li>
+              ))}
             </ul>
+            <div className="text-xs text-muted-foreground mt-2 italic">
+              Исправьте запрос (уточните контрагента, сумму, реквизиты) и отправьте новое сообщение.
+            </div>
           </div>
         ) : null}
+
+        {/* Блок 4: skipped (не selected approvedActions) — серый, нейтральный */}
+        {result.skipped.length > 0 ? (
+          <div className="text-xs text-muted-foreground">
+            <span className="font-semibold">⊘ Пропущено ({result.skipped.length}):</span>{" "}
+            {result.skipped.map((s) => labelFor(s.actionType)).join(", ")}
+          </div>
+        ) : null}
+
         <Button size="sm" variant="outline" onClick={onClose}>Новый запрос</Button>
       </CardContent>
     </Card>
@@ -746,13 +796,20 @@ function PaymentSuggestionBlock({ suggestion }: { suggestion: PaymentSuggestionR
   );
 }
 
-function AuditLogCard({ items, loading }: { items: AuditLogEntry[]; loading: boolean }) {
+function AuditLogCard({ items, loading, onRefresh }: { items: AuditLogEntry[]; loading: boolean; onRefresh: () => void }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">История AI-действий</CardTitle>
+        <CardTitle className="text-base flex items-center justify-between">
+          <span>История AI-действий</span>
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading} aria-label="Обновить историю">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Обновить
+          </Button>
+        </CardTitle>
         <CardDescription>
-          Подтверждённые действия по выбранной организации. Read-only: вы видите только свои данные.
+          Подтверждённые AI-действия по выбранной организации. Read-only: вы видите только свои данные.
+          Payload action не отображается — только тип, цель и краткое сообщение пользователя.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -770,13 +827,18 @@ function AuditLogCard({ items, loading }: { items: AuditLogEntry[]; loading: boo
                   <span className="text-xs text-muted-foreground font-mono">
                     {new Date(row.createdAt).toLocaleString("ru-RU")}
                   </span>
-                  <Badge variant="outline">{labelFor(row.actionType)}</Badge>
+                  <Badge variant="outline">{labelFor(row.actionType as ActionType)}</Badge>
                   {row.targetId ? (
-                    <Link to={routeFor(row.targetType, row.targetId)} className="text-xs underline underline-offset-2">
-                      открыть {labelForTarget(row.targetType)}
-                    </Link>
+                    <>
+                      <Link to={routeFor(row.targetType, row.targetId)} className="text-xs underline underline-offset-2">
+                        открыть {labelForTarget(row.targetType)}
+                      </Link>
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {row.targetId.slice(0, 8)}…
+                      </span>
+                    </>
                   ) : (
-                    <Badge variant="secondary" className="text-[10px]">read-only</Badge>
+                    <Badge variant="secondary" className="text-[10px]">Без изменения данных</Badge>
                   )}
                 </div>
                 {row.actionPlan?.message ? (

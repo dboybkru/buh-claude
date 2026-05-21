@@ -102,7 +102,7 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body.textContent).toMatch(/без вашего подтверждения|Загрузка/);
   });
 
-  it("AiChatPage (Sprint 6A+6B+6.1+6C)", async () => {
+  it("AiChatPage (Sprint 6A+6B+6.1+6C+6.2)", async () => {
     const { AiChatPage } = await import("@/pages/AiChat");
     renderPage(<AiChatPage />);
     expect(screen.getByText("AI Ассистент")).toBeTruthy();
@@ -117,6 +117,9 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body.textContent).toMatch(/Распредели платёж/);
     // Sprint 6.1 — блок «История AI-действий» рендерится (даже пустой)
     expect(document.body.textContent).toMatch(/История AI-действий/);
+    // Sprint 6.2 — кнопка «Обновить» истории, описание про скрытие payload
+    expect(document.body.textContent).toMatch(/Обновить/);
+    expect(document.body.textContent).toMatch(/Payload action не отображается/);
   });
 
   it("ImportPage", async () => {

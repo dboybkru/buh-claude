@@ -99,7 +99,7 @@ npm run dev
 cd backend
 npm run typecheck          # tsc --noEmit
 npm run test:unit          # vitest unit (114 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B+6C)
-npm run test:integration   # vitest integration (103 теста): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1 + ai-sprint6c
+npm run test:integration   # vitest integration (106 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1 + ai-sprint6c + ai-full-flow
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
 npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
@@ -200,7 +200,45 @@ npm run build          # production-сборка обоих
 - Маппинг колонок — базовый; парсер не подкалиброван под форматы конкретных банков (Сбер, Тинькофф, Альфа выгрузки могут потребовать ручного маппинга колонок в исходном файле).
 - Прямая интеграция с API банков **не реализована** — только импорт файла выгрузки.
 
-## AI assistant (Sprint 6A)
+## AI assistant — full workflow (Sprint 6A + 6B + 6.1 + 6C + 6.2)
+
+Полный AI workflow покрывает 7 безопасных действий:
+
+| Action | Что делает | Read-only? |
+|---|---|:-:|
+| `create_counterparty` | Создаёт нового контрагента | — |
+| `create_invoice` | Создаёт счёт с позициями (НДС: `no_vat / 0 / 10 / 20 / 22`) | — |
+| `create_act_from_invoice` | Создаёт акт на основании существующего счёта (защита от дубля) | — |
+| `create_contract` | Создаёт договор (auto-number, опц. templateId или default-template организации) | — |
+| `analyze_debt` | Возвращает должников + просроченные суммы + рекомендации | ✓ |
+| `create_payment` | Создаёт `Payment` через единый payments-service (IN с опц. allocations / OUT без allocations) | — |
+| `suggest_payment_allocations` | Возвращает FIFO-предложение распределения суммы по неоплаченным счетам | ✓ |
+
+**Безопасный flow:**
+
+```
+message → action plan (DRAFT) → preview → confirm → executor → audit log
+```
+
+AI **никогда не пишет в БД сам**. Любой запрос превращается в action plan со status `DRAFT`, который вы видите в чате и явно подтверждаете кнопкой «Подтвердить действия». Read-only actions (`analyze_debt`, `suggest_payment_allocations`) показывают результат, но НЕ пишут бизнес-данные. Audit log записывает все подтверждённые действия с targetId (или null для read-only).
+
+**История AI-действий** доступна на странице `/ai` — последние 50 подтверждённых действий по выбранной организации, со ссылками на созданные сущности (контрагент / счёт / акт / договор / платёж). Кнопка «Обновить» обновляет список. `payloadJson` action НЕ возвращается наружу — только тип, цель и краткое сообщение пользователя.
+
+**Подробный пошаговый smoke (31 шаг + 9 негативных сценариев):** [docs/ai-smoke-checklist.md](docs/ai-smoke-checklist.md).
+
+### Что AI пока НЕ умеет (важно)
+
+- **НЕ импортирует банковскую выписку** — bank-import работает только вручную через `/bank-import`. AI bank-import сознательно не реализован.
+- **НЕ редактирует** и **НЕ удаляет** существующие документы / контрагентов / договоры / платежи (нет `update_*` / `delete_*` actions).
+- **НЕ меняет** статусы документов или суммы существующих записей.
+- **НЕ распределяет** платежи автоматически без подтверждения — только через явное `create_payment` с allocations или после ручного review результата `suggest_payment_allocations`.
+- **НЕ даёт юридических или налоговых гарантий** — это инструмент-помощник.
+
+Эти ограничения закреплены в `SYSTEM_PROMPT` и в whitelist `ALLOWED_ACTION_TYPES` (только 7 разрешённых типов).
+
+---
+
+## AI assistant — конфигурация (Sprint 6A)
 
 Sprint 6A построил безопасную базу AI-помощника. AI **никогда не пишет в БД сам** — все действия проходят через двухступенчатый flow:
 
