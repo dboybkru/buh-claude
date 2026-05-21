@@ -2,7 +2,14 @@ import React from "react";
 import { Document, Page, View, Text } from "@react-pdf/renderer";
 import { styles } from "../lib/styles.js";
 import { formatAmount, formatDate, formatDateLong } from "../lib/format.js";
-import { PartyBlock, SignaturesPair, type PartyInfo } from "./common.js";
+import {
+  PartyBlock,
+  HeaderStrip,
+  SignaturesWithStamp,
+  type PartyInfo,
+  type PrintFlags,
+  type SellerAssets,
+} from "./common.js";
 
 export interface ReconciliationLineRow {
   date: string;
@@ -24,6 +31,10 @@ export interface ReconciliationPdfProps {
   closingBalance: number;
   lines: ReconciliationLineRow[];
   notes?: string | null;
+  flags: PrintFlags;
+  assets: SellerAssets;
+  defaultFooterText?: string | null;
+  reconciliationNote?: string | null;
 }
 
 export function ReconciliationPdf(props: ReconciliationPdfProps) {
@@ -31,6 +42,7 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
   return (
     <Document>
       <Page size="A4" style={styles.page}>
+        <HeaderStrip party={props.seller} flags={props.flags} assets={props.assets} />
         <Text style={styles.h1}>Акт сверки взаимных расчётов № {props.number}</Text>
         <Text style={styles.subtitle}>
           от {formatDateLong(props.date)} за период {formatDate(props.periodFrom)} — {formatDate(props.periodTo)}
@@ -45,7 +57,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
           </Text>
         </View>
 
-        {/* Шапка таблицы */}
         <View style={styles.table}>
           <View style={styles.tableHeaderRow}>
             <Text style={[styles.cellHeader, { width: 70 }]}>Дата</Text>
@@ -54,7 +65,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
             <Text style={[styles.cellHeader, { width: 90 }]}>Кредит</Text>
           </View>
 
-          {/* Открывающее сальдо */}
           <View style={styles.tableRow}>
             <Text style={[styles.cell, styles.textCenter, { width: 70 }]}>{formatDate(props.periodFrom)}</Text>
             <Text style={[styles.cell, { flexGrow: 1 }]}>Сальдо на начало периода</Text>
@@ -66,7 +76,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
             </Text>
           </View>
 
-          {/* Движения */}
           {props.lines.map((line, idx) => (
             <View key={idx} style={styles.tableRow}>
               <Text style={[styles.cell, styles.textCenter, { width: 70 }]}>{formatDate(line.date)}</Text>
@@ -80,7 +89,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
             </View>
           ))}
 
-          {/* Итоги по оборотам */}
           <View style={[styles.tableRow, { backgroundColor: "#f5f5f5" }]}>
             <Text style={[styles.cell, { width: 70 }]} />
             <Text style={[styles.cell, styles.bold, { flexGrow: 1 }]}>Обороты за период</Text>
@@ -88,7 +96,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
             <Text style={[styles.cell, styles.textRight, styles.bold, { width: 90 }]}>{formatAmount(props.totalCredit)}</Text>
           </View>
 
-          {/* Закрывающее сальдо */}
           <View style={[styles.tableRow, { backgroundColor: "#e8e8e8" }]}>
             <Text style={[styles.cell, styles.textCenter, { width: 70 }]}>{formatDate(props.periodTo)}</Text>
             <Text style={[styles.cell, styles.bold, { flexGrow: 1 }]}>Сальдо на конец периода</Text>
@@ -101,7 +108,6 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
           </View>
         </View>
 
-        {/* Резюме */}
         <View style={{ marginTop: 10 }}>
           {props.closingBalance > 0 ? (
             <Text style={styles.small}>
@@ -120,20 +126,24 @@ export function ReconciliationPdf(props: ReconciliationPdfProps) {
           )}
         </View>
 
-        <SignaturesPair
+        <SignaturesWithStamp
           leftLabel={`От ${props.seller.name}`}
           rightLabel={`От ${props.buyer.name}`}
+          flags={props.flags}
+          assets={props.assets}
+          showAccountantColumn={true}
         />
 
+        {props.reconciliationNote ? (
+          <Text style={[styles.small, { marginTop: 12 }]}>{props.reconciliationNote}</Text>
+        ) : null}
         {props.notes ? (
           <Text style={[styles.small, { marginTop: 12 }]}>Примечание: {props.notes}</Text>
         ) : null}
 
-        {/* TODO[pdf]: символ → отсутствует в глифах PT Sans и отображается как замена.
-            Используем тире как промежуточное решение. Долгосрочно — заменить шрифт на NotoSans
-            с полной поддержкой Unicode или embed-нуть Material Symbols. */}
-        <Text style={[styles.small, { marginTop: 12, color: "#666" }]}>
-          Сальдо положительное — задолженность контрагента. Сальдо отрицательное — переплата контрагента.
+        <Text style={styles.footerNote}>
+          {props.defaultFooterText ??
+            "Сальдо положительное — задолженность контрагента. Сальдо отрицательное — переплата контрагента."}
         </Text>
       </Page>
     </Document>

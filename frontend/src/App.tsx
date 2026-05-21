@@ -13,6 +13,7 @@ import { CounterpartiesPage } from "@/pages/Counterparties";
 import { CounterpartyDetailPage } from "@/pages/CounterpartyDetail";
 import { NomenclaturePage } from "@/pages/Nomenclature";
 import { ContractsPage } from "@/pages/Contracts";
+import { ContractTemplatesPage } from "@/pages/ContractTemplates";
 import { DocumentsListPage } from "@/pages/DocumentsList";
 import { DocumentEditPage } from "@/pages/DocumentEdit";
 import { PaymentsPage } from "@/pages/Payments";
@@ -47,6 +48,7 @@ export function App() {
                 <Route path="/counterparties/:id" element={<CounterpartyDetailPage />} />
                 <Route path="/nomenclature" element={<NomenclaturePage />} />
                 <Route path="/contracts" element={<ContractsPage />} />
+                <Route path="/contract-templates" element={<ContractTemplatesPage />} />
 
                 <Route path="/payments" element={<PaymentsPage />} />
                 <Route path="/reconciliations" element={<ReconciliationsPage />} />

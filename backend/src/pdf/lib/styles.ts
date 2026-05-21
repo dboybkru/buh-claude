@@ -95,6 +95,44 @@ export const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 2,
   },
+  // Шапка с логотипом + реквизитами организации (Sprint 5)
+  headerStrip: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 8,
+    gap: 10,
+  },
+  headerLogo: {
+    width: 64,
+    height: 64,
+    objectFit: "contain",
+  },
+  headerOrgBlock: { flex: 1 },
+  headerOrgName: { fontSize: 11, fontWeight: "bold" },
+  // Подпись + печать на одной строке (Sprint 5)
+  sigImageBox: {
+    position: "relative",
+    height: 40,
+    marginTop: 4,
+  },
+  sigImage: {
+    position: "absolute",
+    left: 0,
+    bottom: 4,
+    width: 110,
+    height: 36,
+    objectFit: "contain",
+  },
+  stampImage: {
+    position: "absolute",
+    right: 0,
+    bottom: -6,
+    width: 80,
+    height: 80,
+    objectFit: "contain",
+    opacity: 0.85,
+  },
+  footerNote: { fontSize: 8, color: "#666", marginTop: 8 },
 });
 
 // Ширины колонок таблицы позиций (доли от 100%): #, наименование, ед, кол-во, цена, без НДС, НДС%, НДС, всего

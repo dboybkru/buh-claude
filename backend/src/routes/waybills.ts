@@ -9,7 +9,10 @@ import { isDocStatusLocked } from "../lib/document-status.js";
 import { renderPdfStream } from "../pdf/render.js";
 import { WaybillPdf } from "../pdf/templates/WaybillPdf.js";
 import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
+import { previewWaybill } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
 import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
@@ -209,6 +212,7 @@ export async function waybillsRoutes(app: FastifyInstance) {
     });
     if (!wb) return reply.code(404).send({ error: "NotFound" });
 
+    const ctx = buildPdfContext(wb.organization, request.user.sub);
     const stream = await renderPdfStream(
       React.createElement(WaybillPdf, {
         number: wb.number,
@@ -223,10 +227,57 @@ export async function waybillsRoutes(app: FastifyInstance) {
         shippedBy: wb.shippedBy,
         receivedBy: wb.receivedBy,
         notes: wb.notes,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        vatLabel: ctx.vatLabel,
+        defaultFooterText: ctx.defaultFooterText,
+        waybillNote: ctx.waybillNote,
       }),
     );
     reply.header("Content-Type", "application/pdf");
     reply.header("Content-Disposition", contentDispositionPdf(`ТОРГ-12 ${wb.number}`));
     return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const wb = await prisma.waybill.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!wb) return reply.code(404).send({ error: "NotFound" });
+    const html = previewWaybill({
+      number: wb.number,
+      date: wb.date,
+      operationType: wb.operationType,
+      subtotal: wb.subtotal,
+      vatAmount: wb.vatAmount,
+      total: wb.total,
+      organization: wb.organization as any,
+      counterparty: wb.counterparty as any,
+      items: wb.items as any,
+      shippedBy: wb.shippedBy,
+      receivedBy: wb.receivedBy,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const wb = await prisma.waybill.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!wb) return reply.code(404).send({ error: "NotFound" });
+    return { warnings: computePrintWarnings({ kind: "waybill", organization: wb.organization, counterparty: wb.counterparty, items: wb.items }) };
   });
 }

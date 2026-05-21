@@ -9,7 +9,10 @@ import { isInvoiceStatusLocked } from "../lib/document-status.js";
 import { renderPdfStream } from "../pdf/render.js";
 import { InvoicePdf } from "../pdf/templates/InvoicePdf.js";
 import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
+import { previewInvoice } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
 import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "PARTIALLY_PAID", "PAID", "CANCELLED", "OVERDUE"]);
@@ -231,8 +234,9 @@ export async function invoicesRoutes(app: FastifyInstance) {
 
   app.get("/:id/pdf", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const userId = request.user.sub;
     const inv = await prisma.invoice.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, userId },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -241,6 +245,7 @@ export async function invoicesRoutes(app: FastifyInstance) {
     });
     if (!inv) return reply.code(404).send({ error: "NotFound" });
 
+    const ctx = buildPdfContext(inv.organization, userId);
     const stream = await renderPdfStream(
       React.createElement(InvoicePdf, {
         number: inv.number,
@@ -256,10 +261,60 @@ export async function invoicesRoutes(app: FastifyInstance) {
         items: mapItems(inv.items),
         signatoryDirector: inv.organization.directorName,
         signatoryAccountant: inv.organization.chiefAccountant,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        vatLabel: ctx.vatLabel,
+        defaultPaymentTerms: ctx.defaultPaymentTerms,
+        defaultFooterText: ctx.defaultFooterText,
+        invoiceNote: ctx.invoiceNote,
+        showQrCode: ctx.showQrCode,
       }),
     );
     reply.header("Content-Type", "application/pdf");
     reply.header("Content-Disposition", contentDispositionPdf(`Счёт ${inv.number}`));
     return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const userId = request.user.sub;
+    const inv = await prisma.invoice.findFirst({
+      where: { id, userId },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!inv) return reply.code(404).send({ error: "NotFound" });
+    const html = previewInvoice({
+      number: inv.number,
+      date: inv.date,
+      dueDate: inv.dueDate,
+      paymentPurpose: inv.paymentPurpose,
+      notes: inv.notes,
+      subtotal: inv.subtotal,
+      vatAmount: inv.vatAmount,
+      total: inv.total,
+      organization: inv.organization as any,
+      counterparty: inv.counterparty as any,
+      items: inv.items as any,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const inv = await prisma.invoice.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!inv) return reply.code(404).send({ error: "NotFound" });
+    return { warnings: computePrintWarnings({ kind: "invoice", organization: inv.organization, counterparty: inv.counterparty, items: inv.items }) };
   });
 }

@@ -59,14 +59,35 @@ interface Organization {
   directorPosition: string | null;
   entrepreneurName: string | null;
   chiefAccountant: string | null;
+  accountantPosition: string | null;
+  basedOn: string | null;
   email: string | null;
   phone: string | null;
+  website: string | null;
   legalAddress: string;
   actualAddress: string | null;
+  postalAddress: string | null;
+  logo: string | null;
+  stamp: string | null;
+  signature: string | null;
   vatMode: VatMode;
   taxSystem: string;
   isDefault: boolean;
   bankAccounts: BankAccount[];
+  printShowLogo: boolean;
+  printShowStamp: boolean;
+  printShowSignature: boolean;
+  printShowAccountantSignature: boolean;
+  printShowBankDetails: boolean;
+  printShowQrCode: boolean;
+  printDefaultVatText: string | null;
+  printDefaultPaymentTerms: string | null;
+  printDefaultFooterText: string | null;
+  printInvoiceNote: string | null;
+  printActNote: string | null;
+  printUpdNote: string | null;
+  printWaybillNote: string | null;
+  printReconciliationNote: string | null;
 }
 
 const orgSchema = z.object({
@@ -80,22 +101,57 @@ const orgSchema = z.object({
   directorPosition: z.string().optional().or(z.literal("")),
   entrepreneurName: z.string().optional().or(z.literal("")),
   chiefAccountant: z.string().optional().or(z.literal("")),
+  accountantPosition: z.string().optional().or(z.literal("")),
+  basedOn: z.string().optional().or(z.literal("")),
   email: z.string().email("Некорректный email").optional().or(z.literal("")),
   phone: z.string().optional().or(z.literal("")),
+  website: z.string().optional().or(z.literal("")),
   legalAddress: z.string().min(1, "Юридический адрес обязателен"),
   actualAddress: z.string().optional().or(z.literal("")),
+  postalAddress: z.string().optional().or(z.literal("")),
   vatMode: z.enum(["EXEMPT", "USN_5", "USN_7", "GENERAL"]),
   taxSystem: z.enum(["OSN", "USN", "USN_INCOME", "AUSN", "ENVD", "PSN", "NPD"]),
   isDefault: z.boolean(),
+  // print settings
+  printShowLogo: z.boolean(),
+  printShowStamp: z.boolean(),
+  printShowSignature: z.boolean(),
+  printShowAccountantSignature: z.boolean(),
+  printShowBankDetails: z.boolean(),
+  printShowQrCode: z.boolean(),
+  printDefaultVatText: z.string().optional().or(z.literal("")),
+  printDefaultPaymentTerms: z.string().optional().or(z.literal("")),
+  printDefaultFooterText: z.string().optional().or(z.literal("")),
+  printInvoiceNote: z.string().optional().or(z.literal("")),
+  printActNote: z.string().optional().or(z.literal("")),
+  printUpdNote: z.string().optional().or(z.literal("")),
+  printWaybillNote: z.string().optional().or(z.literal("")),
+  printReconciliationNote: z.string().optional().or(z.literal("")),
 });
 type OrgForm = z.infer<typeof orgSchema>;
 
 function blankOrg(): OrgForm {
   return {
     type: "OOO", name: "", fullName: "", inn: "", kpp: "", ogrn: "",
-    directorName: "", directorPosition: "", entrepreneurName: "", chiefAccountant: "",
-    email: "", phone: "", legalAddress: "", actualAddress: "",
+    directorName: "", directorPosition: "", entrepreneurName: "",
+    chiefAccountant: "", accountantPosition: "", basedOn: "Устава",
+    email: "", phone: "", website: "",
+    legalAddress: "", actualAddress: "", postalAddress: "",
     vatMode: "GENERAL", taxSystem: "OSN", isDefault: false,
+    printShowLogo: true,
+    printShowStamp: true,
+    printShowSignature: true,
+    printShowAccountantSignature: false,
+    printShowBankDetails: true,
+    printShowQrCode: false,
+    printDefaultVatText: "",
+    printDefaultPaymentTerms: "",
+    printDefaultFooterText: "",
+    printInvoiceNote: "",
+    printActNote: "",
+    printUpdNote: "",
+    printWaybillNote: "",
+    printReconciliationNote: "",
   };
 }
 
@@ -215,11 +271,23 @@ function OrgDialog({ organization, onClose, onSaved }: { organization: Organizat
           directorPosition: organization.directorPosition ?? "",
           entrepreneurName: organization.entrepreneurName ?? "",
           chiefAccountant: organization.chiefAccountant ?? "",
+          accountantPosition: organization.accountantPosition ?? "",
+          basedOn: organization.basedOn ?? "Устава",
           email: organization.email ?? "",
           phone: organization.phone ?? "",
+          website: organization.website ?? "",
           actualAddress: organization.actualAddress ?? "",
+          postalAddress: organization.postalAddress ?? "",
           type: organization.type as OrgForm["type"],
           taxSystem: organization.taxSystem as OrgForm["taxSystem"],
+          printDefaultVatText: organization.printDefaultVatText ?? "",
+          printDefaultPaymentTerms: organization.printDefaultPaymentTerms ?? "",
+          printDefaultFooterText: organization.printDefaultFooterText ?? "",
+          printInvoiceNote: organization.printInvoiceNote ?? "",
+          printActNote: organization.printActNote ?? "",
+          printUpdNote: organization.printUpdNote ?? "",
+          printWaybillNote: organization.printWaybillNote ?? "",
+          printReconciliationNote: organization.printReconciliationNote ?? "",
         }
       : blankOrg(),
   });
@@ -233,9 +301,21 @@ function OrgDialog({ organization, onClose, onSaved }: { organization: Organizat
       directorPosition: values.directorPosition || null,
       entrepreneurName: values.entrepreneurName || null,
       chiefAccountant: values.chiefAccountant || null,
+      accountantPosition: values.accountantPosition || null,
+      basedOn: values.basedOn || null,
       email: values.email || null,
       phone: values.phone || null,
+      website: values.website || null,
       actualAddress: values.actualAddress || null,
+      postalAddress: values.postalAddress || null,
+      printDefaultVatText: values.printDefaultVatText || null,
+      printDefaultPaymentTerms: values.printDefaultPaymentTerms || null,
+      printDefaultFooterText: values.printDefaultFooterText || null,
+      printInvoiceNote: values.printInvoiceNote || null,
+      printActNote: values.printActNote || null,
+      printUpdNote: values.printUpdNote || null,
+      printWaybillNote: values.printWaybillNote || null,
+      printReconciliationNote: values.printReconciliationNote || null,
     };
     try {
       if (isNew) {
@@ -362,14 +442,33 @@ function OrgDialog({ organization, onClose, onSaved }: { organization: Organizat
             <input type="checkbox" {...form.register("isDefault")} /> Основная организация
           </label>
 
+          <FormField label="Сайт">
+            <Input {...form.register("website")} placeholder="https://example.com" />
+          </FormField>
+          <FormField label="Почтовый адрес (если отличается)">
+            <Input {...form.register("postalAddress")} />
+          </FormField>
+          <FormField label="Действует на основании">
+            <Input {...form.register("basedOn")} placeholder="Устава" />
+          </FormField>
+          {!isIp ? (
+            <FormField label="Должность бухгалтера">
+              <Input {...form.register("accountantPosition")} placeholder="Главный бухгалтер" />
+            </FormField>
+          ) : null}
+
           {!isNew ? (
             <>
               <Separator />
               <BankAccountsEditor organizationId={organization!.id} accounts={organization!.bankAccounts} />
+              <Separator />
+              <AssetsEditor org={organization!} />
+              <Separator />
+              <PrintSettingsEditor form={form} />
             </>
           ) : (
             <div className="text-xs text-muted-foreground">
-              Банковские реквизиты можно добавить после сохранения организации.
+              Банковские реквизиты, логотип/печать/подпись и настройки печати можно добавить после сохранения организации.
             </div>
           )}
 
@@ -475,6 +574,173 @@ export function FormField({ label, error, children }: { label: string; error?: s
       <Label className="text-xs text-muted-foreground">{label}</Label>
       {children}
       {error ? <div className="text-xs text-destructive">{error}</div> : null}
+    </div>
+  );
+}
+
+function AssetsEditor({ org }: { org: Organization }) {
+  const qc = useQueryClient();
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold">Реквизиты и печатные формы</h3>
+      <div className="text-xs text-muted-foreground">
+        Загруженные изображения используются только в печатных формах. Размер до 5&nbsp;MB. Форматы PNG, JPG, WEBP.
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {(["logo", "stamp", "signature"] as const).map((kind) => (
+          <AssetSlot
+            key={kind}
+            kind={kind}
+            organizationId={org.id}
+            currentPath={org[kind]}
+            onChange={() => qc.invalidateQueries({ queryKey: ["organizations"] })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const ASSET_LABEL: Record<"logo" | "stamp" | "signature", string> = {
+  logo: "Логотип",
+  stamp: "Печать",
+  signature: "Подпись руководителя",
+};
+
+function AssetSlot({
+  organizationId,
+  kind,
+  currentPath,
+  onChange,
+}: {
+  organizationId: string;
+  kind: "logo" | "stamp" | "signature";
+  currentPath: string | null;
+  onChange: () => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const inputId = `asset-${kind}-${organizationId}`;
+
+  async function upload(file: File) {
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Файл больше 5 MB");
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      await api.post(`/files/organizations/${organizationId}/${kind}`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      toast.success(`${ASSET_LABEL[kind]} загружена`);
+      onChange();
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Удалить ${ASSET_LABEL[kind].toLowerCase()}?`)) return;
+    try {
+      await api.delete(`/files/organizations/${organizationId}/${kind}`);
+      onChange();
+      toast.success("Удалено");
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  const fileUrl = currentPath ? `/api/v1/files/${currentPath}` : null;
+  return (
+    <div className="rounded-md border p-2 flex flex-col items-center gap-1.5">
+      <div className="text-xs font-medium">{ASSET_LABEL[kind]}</div>
+      <div className="h-20 w-full flex items-center justify-center bg-muted/40 rounded overflow-hidden">
+        {fileUrl ? (
+          <img src={fileUrl} alt={ASSET_LABEL[kind]} className="max-h-full max-w-full object-contain" />
+        ) : (
+          <span className="text-xs text-muted-foreground">не загружено</span>
+        )}
+      </div>
+      <div className="flex gap-1 w-full">
+        <label htmlFor={inputId} className="flex-1 cursor-pointer">
+          <Button type="button" variant="outline" size="sm" className="w-full" disabled={uploading} asChild>
+            <span>{uploading ? "…" : "Загрузить"}</span>
+          </Button>
+          <input
+            id={inputId}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) upload(f);
+              e.currentTarget.value = "";
+            }}
+          />
+        </label>
+        {currentPath ? (
+          <Button type="button" variant="ghost" size="icon" onClick={remove} aria-label="Удалить">
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PrintSettingsEditor({ form }: { form: ReturnType<typeof useForm<OrgForm>> }) {
+  const Checkbox = ({ name, label }: { name: keyof OrgForm; label: string }) => (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        checked={Boolean(form.watch(name))}
+        onChange={(e) => form.setValue(name, e.target.checked as never)}
+      />
+      {label}
+    </label>
+  );
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold">Настройки печати</h3>
+      <div className="grid grid-cols-2 gap-1">
+        <Checkbox name="printShowLogo" label="Показывать логотип" />
+        <Checkbox name="printShowStamp" label="Показывать печать" />
+        <Checkbox name="printShowSignature" label="Показывать подпись" />
+        <Checkbox name="printShowAccountantSignature" label="Колонка бухгалтера" />
+        <Checkbox name="printShowBankDetails" label="Банковские реквизиты" />
+        <Checkbox name="printShowQrCode" label="QR-код оплаты (MVP — TODO)" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="Текст НДС (вместо авто)">
+          <Input {...form.register("printDefaultVatText")} placeholder="Например: «НДС не облагается»" />
+        </FormField>
+        <FormField label="Условия оплаты (на счёте)">
+          <Input {...form.register("printDefaultPaymentTerms")} />
+        </FormField>
+      </div>
+      <FormField label="Подпись внизу всех документов (footer)">
+        <Textarea {...form.register("printDefaultFooterText")} rows={2} />
+      </FormField>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="Примечание на счёте">
+          <Textarea {...form.register("printInvoiceNote")} rows={2} />
+        </FormField>
+        <FormField label="Примечание на акте">
+          <Textarea {...form.register("printActNote")} rows={2} />
+        </FormField>
+        <FormField label="Примечание на УПД">
+          <Textarea {...form.register("printUpdNote")} rows={2} />
+        </FormField>
+        <FormField label="Примечание на ТОРГ-12">
+          <Textarea {...form.register("printWaybillNote")} rows={2} />
+        </FormField>
+      </div>
+      <FormField label="Примечание на акте сверки">
+        <Textarea {...form.register("printReconciliationNote")} rows={2} />
+      </FormField>
     </div>
   );
 }

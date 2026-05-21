@@ -2,7 +2,9 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Trash2, Edit, FileSignature, Receipt } from "lucide-react";
+import { Plus, Trash2, Edit, FileSignature, Receipt, Eye, FileDown } from "lucide-react";
+import { HtmlPreviewDialog } from "@/components/HtmlPreviewDialog";
+import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -32,6 +34,7 @@ interface Contract {
   id: string;
   organizationId: string;
   counterpartyId: string;
+  templateId: string | null;
   number: string;
   date: string;
   expiryDate: string | null;
@@ -44,6 +47,7 @@ interface Contract {
   organization?: { id: string; name: string; inn: string };
   counterparty?: { id: string; name: string; inn: string };
 }
+interface TemplateOpt { id: string; name: string }
 
 interface OrgOpt { id: string; name: string; inn: string }
 interface CpOpt { id: string; name: string; inn: string }
@@ -51,6 +55,7 @@ interface CpOpt { id: string; name: string; inn: string }
 const contractSchema = z.object({
   organizationId: z.string().uuid("Выберите организацию"),
   counterpartyId: z.string().uuid("Выберите контрагента"),
+  templateId: z.string().uuid().optional().or(z.literal("")),
   number: z.string().min(1, "Номер обязателен"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата ГГГГ-ММ-ДД"),
   expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("")),
@@ -65,7 +70,7 @@ type ContractForm = z.infer<typeof contractSchema>;
 
 function blank(): ContractForm {
   return {
-    organizationId: "", counterpartyId: "", number: "",
+    organizationId: "", counterpartyId: "", templateId: "", number: "",
     date: new Date().toISOString().slice(0, 10),
     expiryDate: "", subject: "", amount: "", currency: "RUB",
     status: "ACTIVE", autoRenew: false, description: "",
@@ -159,8 +164,10 @@ export function ContractsPage() {
 function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | null; onClose: () => void; onSaved: () => void }) {
   const isNew = !contract;
   const navigate = useNavigate();
+  const [previewOpen, setPreviewOpen] = useState(false);
   const orgs = useQuery({ queryKey: ["orgs-opts"], queryFn: async () => (await api.get<Page<OrgOpt>>("/organizations", { params: { pageSize: 200 } })).data.items });
   const cps = useQuery({ queryKey: ["cps-opts"], queryFn: async () => (await api.get<Page<CpOpt>>("/counterparties", { params: { pageSize: 200 } })).data.items });
+  const templates = useQuery({ queryKey: ["contract-templates-opts"], queryFn: async () => (await api.get<Page<TemplateOpt>>("/contract-templates", { params: { pageSize: 200 } })).data.items });
 
   const form = useForm<ContractForm>({
     resolver: zodResolver(contractSchema),
@@ -169,6 +176,7 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
           ...blank(),
           organizationId: contract.organizationId,
           counterpartyId: contract.counterpartyId,
+          templateId: contract.templateId ?? "",
           number: contract.number,
           date: contract.date.slice(0, 10),
           expiryDate: contract.expiryDate ? contract.expiryDate.slice(0, 10) : "",
@@ -185,6 +193,7 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
   async function onSubmit(v: ContractForm) {
     const payload = {
       ...v,
+      templateId: v.templateId || null,
       expiryDate: v.expiryDate || null,
       subject: v.subject || null,
       amount: v.amount === "" ? null : Number(v.amount),
@@ -251,22 +260,40 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
               </Select>
             </FormField>
           </div>
-          <FormField label="Описание">
+          <FormField label="Шаблон (для PDF/preview)">
+            <Select value={form.watch("templateId") || "none"} onValueChange={(v) => form.setValue("templateId", v === "none" ? "" : v)}>
+              <SelectTrigger><SelectValue placeholder="— без шаблона —" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— без шаблона —</SelectItem>
+                {templates.data?.map((t) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="Описание (если без шаблона — используется как тело PDF)">
             <Textarea {...form.register("description")} rows={2} />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...form.register("autoRenew")} /> Автопролонгация
           </label>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 flex-wrap">
             {!isNew ? (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => navigate(`/invoices/new?fromContract=${contract!.id}`)}
-              >
-                <Receipt className="h-4 w-4" /> Создать счёт
-              </Button>
+              <>
+                <Button type="button" variant="secondary" onClick={() => navigate(`/invoices/new?fromContract=${contract!.id}`)}>
+                  <Receipt className="h-4 w-4" /> Создать счёт
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}>
+                  <Eye className="h-4 w-4" /> Превью
+                </Button>
+                <Button type="button" variant="outline" onClick={async () => {
+                  try {
+                    const { blob, filename } = await fetchAuthorizedBlob(`/api/v1/contracts/${contract!.id}/pdf`, `Договор ${contract!.number}.pdf`);
+                    triggerDownload(blob, filename);
+                  } catch (err) { handleApiError(err, "Не удалось скачать PDF"); }
+                }}>
+                  <FileDown className="h-4 w-4" /> PDF
+                </Button>
+              </>
             ) : null}
             <div className="flex-1" />
             <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
@@ -275,6 +302,17 @@ function ContractDialog({ contract, onClose, onSaved }: { contract: Contract | n
             </Button>
           </DialogFooter>
         </form>
+
+        {!isNew ? (
+          <HtmlPreviewDialog
+            open={previewOpen}
+            onClose={() => setPreviewOpen(false)}
+            previewUrl={`/api/v1/contracts/${contract!.id}/preview`}
+            pdfUrl={`/api/v1/contracts/${contract!.id}/pdf`}
+            fallbackName={`Договор-${contract!.number}.pdf`}
+            title={`Договор ${contract!.number}`}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );

@@ -8,6 +8,8 @@ import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { PdfPreviewDialog } from "@/components/PdfPreviewDialog";
+import { HtmlPreviewDialog } from "@/components/HtmlPreviewDialog";
+import { PrintWarnings } from "@/components/PrintWarnings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -156,6 +158,7 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
   const [state, setState] = useState<State>(() => initState(kind));
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [htmlPreviewOpen, setHtmlPreviewOpen] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   // Платежи по счёту (только для invoices)
@@ -346,8 +349,11 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
           ) : null}
           {!isNew ? (
             <>
-              <Button variant="outline" onClick={() => setPreviewOpen(true)} aria-label="Превью PDF">
+              <Button variant="outline" onClick={() => setHtmlPreviewOpen(true)} aria-label="Превью HTML">
                 <Eye className="h-4 w-4" /> Превью
+              </Button>
+              <Button variant="outline" onClick={() => setPreviewOpen(true)} aria-label="Превью PDF">
+                <FileText className="h-4 w-4" /> Превью PDF
               </Button>
               <Button variant="outline" onClick={downloadPdf} aria-label="Скачать PDF">
                 <FileDown className="h-4 w-4" /> Скачать PDF
@@ -542,6 +548,8 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
         </CardContent>
       </Card>
 
+      {!isNew ? <PrintWarnings url={`${cfg.apiPath}/${id}/print-warnings`} /> : null}
+
       <Card>
         <CardContent className="pt-6">
           <ItemsEditor items={totals.items} vatIncluded={state.vatIncluded} onChange={setItems} disabled={locked} />
@@ -624,13 +632,23 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
       ) : null}
 
       {!isNew ? (
-        <PdfPreviewDialog
-          open={previewOpen}
-          onClose={() => setPreviewOpen(false)}
-          url={`/api/v1${cfg.apiPath}/${id}/pdf`}
-          fallbackName={`${cfg.titleSingular}-${state.number}.pdf`}
-          title={`${cfg.titleSingular} ${state.number}`}
-        />
+        <>
+          <PdfPreviewDialog
+            open={previewOpen}
+            onClose={() => setPreviewOpen(false)}
+            url={`/api/v1${cfg.apiPath}/${id}/pdf`}
+            fallbackName={`${cfg.titleSingular}-${state.number}.pdf`}
+            title={`${cfg.titleSingular} ${state.number}`}
+          />
+          <HtmlPreviewDialog
+            open={htmlPreviewOpen}
+            onClose={() => setHtmlPreviewOpen(false)}
+            previewUrl={`/api/v1${cfg.apiPath}/${id}/preview`}
+            pdfUrl={`/api/v1${cfg.apiPath}/${id}/pdf`}
+            fallbackName={`${cfg.titleSingular}-${state.number}.pdf`}
+            title={`${cfg.titleSingular} ${state.number} — предпросмотр`}
+          />
+        </>
       ) : null}
     </div>
   );

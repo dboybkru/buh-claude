@@ -1,8 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import React from "react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
+import { renderContract } from "../lib/contract-template.js";
+import { previewContract } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
+import { renderPdfStream } from "../pdf/render.js";
+import { ContractPdf } from "../pdf/templates/ContractPdf.js";
+import { mapSeller, mapBuyer } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
+import { contentDispositionPdf } from "../pdf/filename.js";
 
 const statusEnum = z.enum(["DRAFT", "ACTIVE", "EXPIRED", "TERMINATED"]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата должна быть в формате ГГГГ-ММ-ДД");
@@ -10,6 +19,7 @@ const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата должн�
 const baseShape = {
   organizationId: z.string().uuid(),
   counterpartyId: z.string().uuid(),
+  templateId: z.string().uuid().optional().nullable(),
   number: z.string().min(1).max(64),
   date: dateString,
   expiryDate: dateString.optional().nullable(),
@@ -143,5 +153,88 @@ export async function contractsRoutes(app: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // PDF договора. Если есть templateId — рендерится по шаблону, иначе — body из description.
+  app.get("/:id/pdf", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const userId = request.user.sub;
+    const c = await prisma.contract.findFirst({
+      where: { id, userId },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        template: true,
+      },
+    });
+    if (!c) return reply.code(404).send({ error: "NotFound" });
+
+    const body = c.template
+      ? renderContract(c.template.content, {
+          organization: c.organization,
+          counterparty: c.counterparty,
+          contract: { number: c.number, date: c.date, amount: c.amount, currency: c.currency, subject: c.subject },
+        }).text
+      : c.description ?? "Текст договора не задан. Создайте шаблон или укажите описание.";
+
+    const ctx = buildPdfContext(c.organization, userId);
+    const stream = await renderPdfStream(
+      React.createElement(ContractPdf, {
+        number: c.number,
+        date: c.date,
+        seller: mapSeller(c.organization),
+        buyer: mapBuyer(c.counterparty),
+        body,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        defaultFooterText: ctx.defaultFooterText,
+      }),
+    );
+    reply.header("Content-Type", "application/pdf");
+    reply.header("Content-Disposition", contentDispositionPdf(`Договор ${c.number}`));
+    return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const c = await prisma.contract.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        template: true,
+      },
+    });
+    if (!c) return reply.code(404).send({ error: "NotFound" });
+    const body = c.template
+      ? renderContract(c.template.content, {
+          organization: c.organization,
+          counterparty: c.counterparty,
+          contract: { number: c.number, date: c.date, amount: c.amount, currency: c.currency, subject: c.subject },
+        }).text
+      : c.description ?? "Текст договора не задан. Создайте шаблон или укажите описание.";
+    const html = previewContract({
+      number: c.number,
+      date: c.date,
+      amount: c.amount,
+      organization: c.organization as any,
+      counterparty: c.counterparty as any,
+      body,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const c = await prisma.contract.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+      },
+    });
+    if (!c) return reply.code(404).send({ error: "NotFound" });
+    return { warnings: computePrintWarnings({ kind: "contract", organization: c.organization, counterparty: c.counterparty, subject: c.subject }) };
   });
 }

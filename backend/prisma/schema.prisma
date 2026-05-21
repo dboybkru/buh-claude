@@ -62,44 +62,66 @@ model UserSession {
 // =============================================================================
 
 model Organization {
-  id               String    @id @default(uuid())
-  userId           String
-  type             OrgType
-  name             String                       // Краткое наименование (для отображения)
-  fullName         String                       // Полное наименование (для документов)
-  inn              String                       // ИНН: 10 (юрлицо) или 12 (ИП) цифр
-  kpp              String?                      // КПП: 9 цифр (отсутствует у ИП)
-  ogrn             String?                      // ОГРН: 13 (юрлицо) или 15 (ИП) цифр
-  okpo             String?
-  oktmo            String?
-  okveds           String[]                     // Коды ОКВЭД
-  directorName     String?                      // ФИО руководителя (ООО/АО)
-  directorPosition String?                      // Должность ("Генеральный директор" и т.п.)
-  entrepreneurName String?                      // ФИО предпринимателя (ИП)
-  chiefAccountant  String?                      // ФИО главного бухгалтера
-  email            String?
-  phone            String?
-  legalAddress     String                       // Юридический адрес
-  actualAddress    String?                      // Фактический адрес (если отличается)
-  logo             String?                      // Путь к файлу логотипа
-  stamp            String?                      // Путь к скану печати
-  signature        String?                      // Путь к скану подписи руководителя
-  vatMode          VatMode   @default(GENERAL)  // Режим НДС (реформа 2026: УСН тоже может быть плательщиком)
-  taxSystem        TaxSystem @default(OSN)
-  isDefault        Boolean   @default(false)    // Организация по умолчанию для новых документов
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                 String    @id @default(uuid())
+  userId             String
+  type               OrgType
+  name               String                       // Краткое наименование (для отображения)
+  fullName           String                       // Полное наименование (для документов)
+  inn                String                       // ИНН: 10 (юрлицо) или 12 (ИП) цифр
+  kpp                String?                      // КПП: 9 цифр (отсутствует у ИП)
+  ogrn               String?                      // ОГРН: 13 (юрлицо) или 15 (ИП) цифр
+  okpo               String?
+  oktmo              String?
+  okveds             String[]                     // Коды ОКВЭД
+  directorName       String?                      // ФИО руководителя (ООО/АО)
+  directorPosition   String?                      // Должность ("Генеральный директор" и т.п.)
+  entrepreneurName   String?                      // ФИО предпринимателя (ИП)
+  chiefAccountant    String?                      // ФИО главного бухгалтера
+  accountantPosition String?                      // Должность бухгалтера ("Главный бухгалтер")
+  basedOn            String?    @default("Устава") // На основании чего действует руководитель
+  email              String?
+  phone              String?
+  website            String?
+  legalAddress       String                       // Юридический адрес
+  actualAddress      String?                      // Фактический адрес (если отличается)
+  postalAddress      String?                      // Почтовый адрес
+  logo               String?                      // Путь к файлу логотипа
+  stamp              String?                      // Путь к скану печати
+  signature          String?                      // Путь к скану подписи руководителя
+  vatMode            VatMode   @default(GENERAL)  // Режим НДС (реформа 2026: УСН тоже может быть плательщиком)
+  taxSystem          TaxSystem @default(OSN)
+  isDefault          Boolean   @default(false)    // Организация по умолчанию для новых документов
 
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bankAccounts BankAccount[]
-  contracts    Contract[]
-  invoices     Invoice[]
-  acts         Act[]
-  updDocuments UpdDocument[]
-  waybills     Waybill[]
-  numbering    DocumentNumbering[]
-  payments     Payment[]
-  reconciliations ReconciliationAct[]
+  // Настройки печатных форм (Sprint 5)
+  printShowLogo                Boolean @default(true)
+  printShowStamp               Boolean @default(true)
+  printShowSignature           Boolean @default(true)
+  printShowAccountantSignature Boolean @default(false)
+  printShowBankDetails         Boolean @default(true)
+  printShowQrCode              Boolean @default(false)
+  printDefaultVatText          String?
+  printDefaultPaymentTerms     String?
+  printDefaultFooterText       String?
+  printInvoiceNote             String?
+  printActNote                 String?
+  printUpdNote                 String?
+  printWaybillNote             String?
+  printReconciliationNote      String?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankAccounts      BankAccount[]
+  contracts         Contract[]
+  invoices          Invoice[]
+  acts              Act[]
+  updDocuments      UpdDocument[]
+  waybills          Waybill[]
+  numbering         DocumentNumbering[]
+  payments          Payment[]
+  reconciliations   ReconciliationAct[]
+  contractTemplates ContractTemplate[]
 
   @@unique([userId, inn])
   @@index([userId])
@@ -201,6 +223,7 @@ model Contract {
   userId         String
   organizationId String
   counterpartyId String
+  templateId     String?                          // Шаблон, на основе которого создан (Sprint 5)
   number         String
   date           DateTime       @db.Date
   expiryDate     DateTime?      @db.Date         // Дата окончания (если есть)
@@ -214,9 +237,10 @@ model Contract {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization  @relation(fields: [organizationId], references: [id])
-  counterparty Counterparty  @relation(fields: [counterpartyId], references: [id])
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  counterparty Counterparty      @relation(fields: [counterpartyId], references: [id])
+  template     ContractTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   invoices     Invoice[]
   acts         Act[]
   updDocuments UpdDocument[]
@@ -227,6 +251,32 @@ model Contract {
   @@index([organizationId])
   @@index([counterpartyId])
   @@index([expiryDate])
+  @@index([templateId])
+}
+
+// =============================================================================
+// CONTRACT TEMPLATES (шаблоны договоров — Sprint 5)
+// Хранит исходный текст с переменными {{...}}, при создании договора рендерится
+// с подстановкой реквизитов организации/контрагента/договора.
+// =============================================================================
+
+model ContractTemplate {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String?                              // null = доступен для всех организаций пользователя
+  name           String
+  description    String?
+  content        String                               // Текст шаблона (с {{переменными}})
+  variables      Json     @default("[]")              // Обнаруженные переменные (для UI подсказок)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contracts    Contract[]
+
+  @@index([userId])
+  @@index([organizationId])
 }
 
 // =============================================================================

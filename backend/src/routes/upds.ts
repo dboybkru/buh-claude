@@ -9,7 +9,10 @@ import { isDocStatusLocked } from "../lib/document-status.js";
 import { renderPdfStream } from "../pdf/render.js";
 import { UpdPdf } from "../pdf/templates/UpdPdf.js";
 import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
+import { previewUpd } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
 import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
@@ -226,6 +229,7 @@ export async function updsRoutes(app: FastifyInstance) {
     });
     if (!upd) return reply.code(404).send({ error: "NotFound" });
 
+    const ctx = buildPdfContext(upd.organization, request.user.sub);
     const stream = await renderPdfStream(
       React.createElement(UpdPdf, {
         number: upd.number,
@@ -244,10 +248,59 @@ export async function updsRoutes(app: FastifyInstance) {
         sellerSignatory: upd.sellerSignatory,
         buyerSignatory: upd.buyerSignatory,
         notes: upd.notes,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        vatLabel: ctx.vatLabel,
+        defaultFooterText: ctx.defaultFooterText,
+        updNote: ctx.updNote,
       }),
     );
     reply.header("Content-Type", "application/pdf");
     reply.header("Content-Disposition", contentDispositionPdf(`УПД ${upd.number}`));
     return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const upd = await prisma.updDocument.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!upd) return reply.code(404).send({ error: "NotFound" });
+    const html = previewUpd({
+      number: upd.number,
+      date: upd.date,
+      functionType: upd.functionType,
+      subtotal: upd.subtotal,
+      vatAmount: upd.vatAmount,
+      total: upd.total,
+      organization: upd.organization as any,
+      counterparty: upd.counterparty as any,
+      items: upd.items as any,
+      shipmentDate: upd.shipmentDate,
+      shipmentAddress: upd.shipmentAddress,
+      sellerSignatory: upd.sellerSignatory,
+      buyerSignatory: upd.buyerSignatory,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const upd = await prisma.updDocument.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!upd) return reply.code(404).send({ error: "NotFound" });
+    return { warnings: computePrintWarnings({ kind: "upd", organization: upd.organization, counterparty: upd.counterparty, items: upd.items }) };
   });
 }

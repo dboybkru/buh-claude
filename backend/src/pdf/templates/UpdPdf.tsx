@@ -3,7 +3,17 @@ import { Document, Page, View, Text } from "@react-pdf/renderer";
 import { styles } from "../lib/styles.js";
 import { formatDate, formatDateLong } from "../lib/format.js";
 import { amountToWords } from "../lib/amount-to-words.js";
-import { PartyBlock, ItemsTable, Totals, SignaturesPair, type PartyInfo, type ItemRow } from "./common.js";
+import {
+  PartyBlock,
+  ItemsTable,
+  Totals,
+  HeaderStrip,
+  SignaturesWithStamp,
+  type PartyInfo,
+  type ItemRow,
+  type PrintFlags,
+  type SellerAssets,
+} from "./common.js";
 
 export interface UpdPdfProps {
   number: string;
@@ -22,6 +32,11 @@ export interface UpdPdfProps {
   sellerSignatory?: string | null;
   buyerSignatory?: string | null;
   notes?: string | null;
+  flags: PrintFlags;
+  assets: SellerAssets;
+  vatLabel?: string | null;
+  defaultFooterText?: string | null;
+  updNote?: string | null;
 }
 
 export function UpdPdf(props: UpdPdfProps) {
@@ -32,6 +47,8 @@ export function UpdPdf(props: UpdPdfProps) {
   return (
     <Document>
       <Page size="A4" orientation="landscape" style={styles.page}>
+        <HeaderStrip party={props.seller} flags={props.flags} assets={props.assets} />
+
         <View style={[styles.rowSpaced, { marginBottom: 4 }]}>
           <Text style={styles.small}>Универсальный передаточный документ</Text>
           <Text style={[styles.small, styles.bold]}>{statusLabel}</Text>
@@ -61,21 +78,29 @@ export function UpdPdf(props: UpdPdfProps) {
         <Totals subtotal={props.subtotal} vatAmount={props.vatAmount} total={props.total} />
 
         <View style={{ marginTop: 8 }}>
-          <Text style={styles.small}>
+          {props.vatLabel ? (
+            <Text style={styles.small}>{props.vatLabel}</Text>
+          ) : null}
+          <Text style={[styles.small, { marginTop: 4 }]}>
             Сумма прописью: <Text style={styles.bold}>{amountToWords(Number(String(props.total)))}</Text>
           </Text>
         </View>
 
-        <SignaturesPair
+        <SignaturesWithStamp
           leftLabel="Руководитель организации (продавец)"
           rightLabel="Покупатель (груз получил)"
           leftName={props.sellerSignatory}
           rightName={props.buyerSignatory}
+          flags={props.flags}
+          assets={props.assets}
+          showAccountantColumn={true}
         />
 
+        {props.updNote ? <Text style={[styles.small, { marginTop: 12 }]}>{props.updNote}</Text> : null}
         {props.notes ? <Text style={[styles.small, { marginTop: 12 }]}>Примечание: {props.notes}</Text> : null}
-        <Text style={[styles.small, { marginTop: 12, color: "#666" }]}>
-          Форма соответствует приказу ФНС России от 19.12.2018 № ММВ-7-15/820@.
+        <Text style={styles.footerNote}>
+          {props.defaultFooterText ??
+            "Форма соответствует приказу ФНС России от 19.12.2018 № ММВ-7-15/820@ (упрощённый MVP)."}
         </Text>
       </Page>
     </Document>

@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text } from "@react-pdf/renderer";
+import { View, Text, Image } from "@react-pdf/renderer";
 import { styles, itemColWidths } from "../lib/styles.js";
 import { formatAmount, formatQuantity } from "../lib/format.js";
 
@@ -137,6 +137,106 @@ export function SignaturesPair({ leftLabel, rightLabel, leftName, rightName }: {
         <View style={styles.sigLine} />
         <Text style={[styles.small, { textAlign: "center" }]}>{rightName ?? "(подпись, расшифровка)"}</Text>
       </View>
+    </View>
+  );
+}
+
+export interface SellerAssets {
+  /** Абсолютный путь к файлу логотипа. */
+  logoPath?: string | null;
+  /** Абсолютный путь к файлу печати. */
+  stampPath?: string | null;
+  /** Абсолютный путь к файлу подписи. */
+  signaturePath?: string | null;
+}
+
+export interface PrintFlags {
+  showLogo: boolean;
+  showStamp: boolean;
+  showSignature: boolean;
+  showAccountantSignature: boolean;
+  showBankDetails: boolean;
+}
+
+/** Шапка с логотипом + кратким реквизитом продавца. */
+export function HeaderStrip({
+  party,
+  flags,
+  assets,
+}: {
+  party: PartyInfo;
+  flags: PrintFlags;
+  assets: SellerAssets;
+}) {
+  const bankLine =
+    flags.showBankDetails && party.bik && party.account
+      ? `${party.bankName ?? ""}, БИК ${party.bik}, р/с ${party.account}${party.corrAccount ? ", к/с " + party.corrAccount : ""}`
+      : null;
+  return (
+    <View style={styles.headerStrip}>
+      {flags.showLogo && assets.logoPath ? (
+        <Image style={styles.headerLogo} src={assets.logoPath} />
+      ) : null}
+      <View style={styles.headerOrgBlock}>
+        <Text style={styles.headerOrgName}>{party.fullName ?? party.name}</Text>
+        <Text style={styles.small}>
+          ИНН {party.inn}
+          {party.kpp ? `, КПП ${party.kpp}` : ""}
+          {party.legalAddress ? ` • ${party.legalAddress}` : ""}
+        </Text>
+        {bankLine ? <Text style={styles.small}>{bankLine}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+/** Блок подписи с опциональной картинкой подписи и печати у левой колонки. */
+export function SignaturesWithStamp({
+  leftLabel,
+  rightLabel,
+  leftName,
+  rightName,
+  flags,
+  assets,
+  showAccountantColumn,
+}: {
+  leftLabel: string;
+  rightLabel: string;
+  leftName?: string | null;
+  rightName?: string | null;
+  flags: PrintFlags;
+  assets: SellerAssets;
+  /** Если false — правая колонка скрывается (используется для актов/упд между сторонами). */
+  showAccountantColumn?: boolean;
+}) {
+  const showRight = showAccountantColumn ?? flags.showAccountantSignature;
+  return (
+    <View style={styles.signatureBlock}>
+      <View style={styles.sigCol}>
+        <Text style={styles.small}>{leftLabel}</Text>
+        <View style={styles.sigImageBox}>
+          {flags.showSignature && assets.signaturePath ? (
+            <Image style={styles.sigImage} src={assets.signaturePath} />
+          ) : null}
+          {flags.showStamp && assets.stampPath ? (
+            <Image style={styles.stampImage} src={assets.stampPath} />
+          ) : null}
+        </View>
+        <View style={styles.sigLine} />
+        <Text style={[styles.small, { textAlign: "center" }]}>
+          {leftName ?? "(подпись, расшифровка)"}
+        </Text>
+      </View>
+      {showRight ? (
+        <View style={styles.sigCol}>
+          <Text style={styles.small}>{rightLabel}</Text>
+          <View style={[styles.sigImageBox, { height: 40 }]} />
+          <View style={styles.sigLine} />
+          <Text style={[styles.small, { textAlign: "center" }]}>
+            {rightName ?? "(подпись, расшифровка)"}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }

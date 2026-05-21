@@ -9,7 +9,10 @@ import { isDocStatusLocked } from "../lib/document-status.js";
 import { renderPdfStream } from "../pdf/render.js";
 import { ActPdf } from "../pdf/templates/ActPdf.js";
 import { mapSeller, mapBuyer, mapItems } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
+import { previewAct } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
 import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
@@ -214,8 +217,9 @@ export async function actsRoutes(app: FastifyInstance) {
 
   app.get("/:id/pdf", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const userId = request.user.sub;
     const act = await prisma.act.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, userId },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -224,6 +228,7 @@ export async function actsRoutes(app: FastifyInstance) {
     });
     if (!act) return reply.code(404).send({ error: "NotFound" });
 
+    const ctx = buildPdfContext(act.organization, userId);
     const stream = await renderPdfStream(
       React.createElement(ActPdf, {
         number: act.number,
@@ -239,10 +244,58 @@ export async function actsRoutes(app: FastifyInstance) {
         sellerSignatory: act.sellerSignatory,
         buyerSignatory: act.buyerSignatory,
         notes: act.notes,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        vatLabel: ctx.vatLabel,
+        defaultFooterText: ctx.defaultFooterText,
+        actNote: ctx.actNote,
       }),
     );
     reply.header("Content-Type", "application/pdf");
     reply.header("Content-Disposition", contentDispositionPdf(`Акт ${act.number}`));
     return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const act = await prisma.act.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!act) return reply.code(404).send({ error: "NotFound" });
+    const html = previewAct({
+      number: act.number,
+      date: act.date,
+      periodStart: act.periodStart,
+      periodEnd: act.periodEnd,
+      subtotal: act.subtotal,
+      vatAmount: act.vatAmount,
+      total: act.total,
+      organization: act.organization as any,
+      counterparty: act.counterparty as any,
+      items: act.items as any,
+      sellerSignatory: act.sellerSignatory,
+      buyerSignatory: act.buyerSignatory,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const act = await prisma.act.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+        items: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    if (!act) return reply.code(404).send({ error: "NotFound" });
+    return { warnings: computePrintWarnings({ kind: "act", organization: act.organization, counterparty: act.counterparty, items: act.items }) };
   });
 }

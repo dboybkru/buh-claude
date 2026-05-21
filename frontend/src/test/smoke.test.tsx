@@ -112,6 +112,26 @@ describe("Smoke: страницы рендерятся", () => {
     expect(screen.getByText("Импорт данных")).toBeTruthy();
   });
 
+  it("ContractTemplatesPage", async () => {
+    const { ContractTemplatesPage } = await import("@/pages/ContractTemplates");
+    renderPage(<ContractTemplatesPage />);
+    expect(screen.getByText("Шаблоны договоров")).toBeTruthy();
+  });
+
+  it("OrganizationsPage", async () => {
+    const { OrganizationsPage } = await import("@/pages/Organizations");
+    renderPage(<OrganizationsPage />);
+    expect(screen.getByText("Мои организации")).toBeTruthy();
+  });
+
+  it("PrintWarnings component", async () => {
+    const { PrintWarnings } = await import("@/components/PrintWarnings");
+    renderPage(<PrintWarnings url="/invoices/x/print-warnings" />);
+    // По умолчанию api mock возвращает пустые items → warnings нет → компонент не рендерит.
+    // Это успешный кейс — главное, что не падает на throw.
+    expect(document.body).toBeTruthy();
+  });
+
   it("BankImportPage", async () => {
     const { BankImportPage } = await import("@/pages/BankImport");
     renderPage(<BankImportPage />);

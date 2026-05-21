@@ -77,12 +77,24 @@ async function main() {
       directorName: "Иванов Иван Иванович",
       directorPosition: "Генеральный директор",
       chiefAccountant: "Петрова Мария Сергеевна",
+      accountantPosition: "Главный бухгалтер",
+      basedOn: "Устава",
       email: "info@alfa.example",
       phone: "+7 (495) 123-45-67",
+      website: "https://alfa.example",
       legalAddress: "117997, г. Москва, ул. Вавилова, д. 19",
+      postalAddress: "117997, г. Москва, а/я 19",
       vatMode: "GENERAL",
       taxSystem: "OSN",
       isDefault: true,
+      printShowLogo: true,
+      printShowStamp: true,
+      printShowSignature: true,
+      printShowAccountantSignature: true,
+      printShowBankDetails: true,
+      printDefaultPaymentTerms: "Оплата в течение 14 банковских дней с момента выставления счёта.",
+      printDefaultFooterText: "ООО «Альфа» — ОГРН 1027700132195, ИНН 7707083893. www.alfa.example",
+      printInvoiceNote: "Счёт действителен в течение 5 банковских дней.",
       bankAccounts: {
         create: [
           {
@@ -190,12 +202,50 @@ async function main() {
   });
   console.log(`  • номенклатура: ${nomen.count} позиций`);
 
-  // 6. Договор
+  // 6. Шаблон договора + Договор
+  const baseTemplateContent = `г. Москва\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t{{contract.date}}
+
+{{organization.fullName}}, именуемое в дальнейшем «Исполнитель», в лице {{directorPosition}} {{directorName}}, действующего на основании {{basedOn}}, с одной стороны, и {{counterparty.fullName}}, именуемое в дальнейшем «Заказчик», в лице {{counterparty.managementName}}, с другой стороны, заключили настоящий договор о нижеследующем.
+
+1. ПРЕДМЕТ ДОГОВОРА
+
+1.1. Исполнитель обязуется оказать Заказчику услуги: {{contract.subject}}.
+1.2. Срок оказания услуг — в соответствии с приложением №1.
+
+2. СТОИМОСТЬ И ПОРЯДОК РАСЧЁТОВ
+
+2.1. Стоимость услуг по настоящему договору составляет {{contract.amount}} {{contract.currency}}.
+2.2. Оплата производится в течение 14 банковских дней с момента подписания акта оказанных услуг.
+
+3. РЕКВИЗИТЫ СТОРОН
+
+Исполнитель: {{organization.fullName}}, ИНН {{organization.inn}}, КПП {{organization.kpp}}, ОГРН {{organization.ogrn}}, адрес: {{organization.legalAddress}}.
+Заказчик: {{counterparty.fullName}}, ИНН {{counterparty.inn}}, адрес: {{counterparty.legalAddress}}.`;
+
+  const baseTemplate = await prisma.contractTemplate.create({
+    data: {
+      userId: user.id,
+      organizationId: org.id,
+      name: "Договор оказания услуг (базовый)",
+      description: "Универсальный шаблон договора на оказание услуг с полем «предмет договора»",
+      content: baseTemplateContent,
+      isDefault: true,
+      variables: [
+        "contract.date", "contract.subject", "contract.amount", "contract.currency",
+        "organization.fullName", "organization.inn", "organization.kpp", "organization.ogrn", "organization.legalAddress",
+        "directorPosition", "directorName", "basedOn",
+        "counterparty.fullName", "counterparty.inn", "counterparty.legalAddress", "counterparty.managementName",
+      ],
+    },
+  });
+  console.log(`  • шаблон договора «${baseTemplate.name}»`);
+
   const contract = await prisma.contract.create({
     data: {
       userId: user.id,
       organizationId: org.id,
       counterpartyId: beta.id,
+      templateId: baseTemplate.id,
       number: "Д-001/2026",
       date: new Date("2026-01-15"),
       expiryDate: new Date("2026-12-31"),

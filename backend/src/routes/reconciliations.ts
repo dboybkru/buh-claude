@@ -9,7 +9,10 @@ import { computeReconciliation } from "../lib/reconciliation.js";
 import { renderPdfStream } from "../pdf/render.js";
 import { ReconciliationPdf } from "../pdf/templates/ReconciliationPdf.js";
 import { mapSeller, mapBuyer } from "../pdf/map.js";
+import { buildPdfContext } from "../pdf/context.js";
 import { contentDisposition } from "../lib/http.js";
+import { previewReconciliation } from "../lib/html-preview.js";
+import { computePrintWarnings } from "../lib/print-warnings.js";
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата ГГГГ-ММ-ДД");
 
@@ -199,6 +202,7 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
     });
     if (!rec) throw Errors.notFound("Акт сверки");
 
+    const ctx = buildPdfContext(rec.organization, request.user.sub);
     const stream = await renderPdfStream(
       React.createElement(ReconciliationPdf, {
         number: rec.number,
@@ -213,10 +217,54 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
         closingBalance: Number(rec.closingBalance),
         lines: rec.lines as unknown as Array<{ date: string; description: string; debit: number; credit: number }>,
         notes: rec.notes,
+        flags: ctx.flags,
+        assets: ctx.assets,
+        defaultFooterText: ctx.defaultFooterText,
+        reconciliationNote: ctx.reconciliationNote,
       }),
     );
     reply.header("Content-Type", "application/pdf");
     reply.header("Content-Disposition", contentDisposition(`Акт сверки ${rec.number}`, "pdf"));
     return reply.send(stream);
+  });
+
+  app.get("/:id/preview", async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const rec = await prisma.reconciliationAct.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+      },
+    });
+    if (!rec) throw Errors.notFound("Акт сверки");
+    const html = previewReconciliation({
+      number: rec.number,
+      date: rec.date,
+      periodFrom: rec.periodFrom,
+      periodTo: rec.periodTo,
+      organization: rec.organization as any,
+      counterparty: rec.counterparty as any,
+      openingBalance: Number(rec.openingBalance),
+      totalDebit: Number(rec.totalDebit),
+      totalCredit: Number(rec.totalCredit),
+      closingBalance: Number(rec.closingBalance),
+      lines: rec.lines as unknown as Array<{ date: string; description: string; debit: number; credit: number }>,
+    });
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  app.get("/:id/print-warnings", async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const rec = await prisma.reconciliationAct.findFirst({
+      where: { id, userId: request.user.sub },
+      include: {
+        organization: { include: { bankAccounts: true } },
+        counterparty: true,
+      },
+    });
+    if (!rec) throw Errors.notFound("Акт сверки");
+    return { warnings: computePrintWarnings({ kind: "reconciliation", organization: rec.organization, counterparty: rec.counterparty }) };
   });
 }

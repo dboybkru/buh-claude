@@ -53,6 +53,7 @@ const NAV: NavGroup[] = [
       { to: "/counterparties", label: "Контрагенты", icon: Users },
       { to: "/nomenclature", label: "Номенклатура", icon: Package },
       { to: "/contracts", label: "Договоры", icon: FileSignature },
+      { to: "/contract-templates", label: "Шаблоны договоров", icon: FileSignature },
     ],
   },
 ];

@@ -1,7 +1,9 @@
 // Мапперы Prisma-сущностей в props для PDF-шаблонов.
 // Получают полный объект документа с `include: { organization: { include: { bankAccounts } }, counterparty, items, bankAccount }`.
 
-import type { PartyInfo, ItemRow } from "./templates/common.js";
+import type { PartyInfo, ItemRow, SellerAssets, PrintFlags } from "./templates/common.js";
+import { extractPrintSettings, type OrgPrintFields } from "../lib/print-settings.js";
+import { resolveSafeAssetPath } from "../lib/uploads.js";
 
 type OrgWithAccounts = {
   name: string;
@@ -9,7 +11,14 @@ type OrgWithAccounts = {
   inn: string;
   kpp?: string | null;
   legalAddress?: string | null;
-  bankAccounts?: Array<{ bankName: string; bik: string; account: string; corrAccount: string; isDefault: boolean }> | null;
+  bankAccounts?: Array<{ id?: string; bankName: string; bik: string; account: string; corrAccount: string; isDefault: boolean }> | null;
+};
+
+type OrgFull = OrgWithAccounts & Partial<OrgPrintFields> & {
+  userId?: string;
+  logo?: string | null;
+  stamp?: string | null;
+  signature?: string | null;
 };
 
 type Counterparty = {
@@ -77,4 +86,25 @@ export function mapItems(items: Item[]): ItemRow[] {
     vatAmount: it.vatAmount,
     total: it.total,
   }));
+}
+
+/** Print settings → флаги для шаблона. */
+export function mapFlags(org: Partial<OrgPrintFields> | null | undefined): PrintFlags {
+  const s = extractPrintSettings(org ?? undefined);
+  return {
+    showLogo: s.showLogo,
+    showStamp: s.showStamp,
+    showSignature: s.showSignature,
+    showAccountantSignature: s.showAccountantSignature,
+    showBankDetails: s.showBankDetails,
+  };
+}
+
+/** Абсолютные пути к файлам подписи/печати/логотипа (для @react-pdf Image src). */
+export function mapAssets(org: OrgFull, userId: string): SellerAssets {
+  return {
+    logoPath: org.logo ? resolveSafeAssetPath(userId, org.logo) : null,
+    stampPath: org.stamp ? resolveSafeAssetPath(userId, org.stamp) : null,
+    signaturePath: org.signature ? resolveSafeAssetPath(userId, org.signature) : null,
+  };
 }
