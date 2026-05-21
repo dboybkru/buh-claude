@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,11 +64,14 @@ export function NomenclaturePage() {
   const [q, setQ] = useState("");
   const dq = useDebouncedValue(q, 300);
   const [editing, setEditing] = useState<Nomen | "new" | null>(null);
+  const [sort, setSort] = useUrlSort({ field: "name", dir: "asc" });
 
   const list = useQuery({
-    queryKey: ["nomenclature", { page, q: dq }],
+    queryKey: ["nomenclature", { page, q: dq, sort }],
     queryFn: async () =>
-      (await api.get<Page<Nomen>>("/nomenclature", { params: { page, pageSize: 20, q: dq || undefined } })).data,
+      (await api.get<Page<Nomen>>("/nomenclature", {
+        params: { page, pageSize: 20, q: dq || undefined, sort: sortQueryParam(sort) },
+      })).data,
   });
 
   const remove = useMutation({
@@ -92,11 +96,14 @@ export function NomenclaturePage() {
         searchPlaceholder="Код или наименование"
         loading={list.isLoading}
         empty="Номенклатуры пока нет"
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
-          { key: "code", header: "Код", width: "120px", cell: (n) => <span className="font-mono text-sm">{n.code}</span> },
+          { key: "code", header: "Код", width: "120px", sortKey: "code", cell: (n) => <span className="font-mono text-sm">{n.code}</span> },
           {
             key: "name",
             header: "Наименование",
+            sortKey: "name",
             cell: (n) => (
               <div className="flex items-center gap-2">
                 <Package className="h-4 w-4 text-muted-foreground" />

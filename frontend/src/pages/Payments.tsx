@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Trash2, Edit, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Plus, Trash2, Edit, ArrowDownToLine, ArrowUpFromLine, Layers, Wand2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -27,6 +27,13 @@ const METHOD_LABELS: Record<string, string> = {
   OTHER: "Другое",
 };
 
+interface PaymentAllocationOut {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  invoice: { id: string; number: string; status: string; total: number; paid: number; balance: number };
+}
+
 interface Payment {
   id: string;
   organizationId: string;
@@ -42,17 +49,20 @@ interface Payment {
   organization?: { id: string; name: string };
   counterparty?: { id: string; name: string; inn: string } | null;
   bankAccount?: { id: string; bankName: string; bik: string } | null;
-  allocations?: Array<{ id: string; invoiceId: string; amount: string; invoice?: { number: string; status: string } }>;
+  allocations?: PaymentAllocationOut[];
+  allocatedAmount?: number;
+  unallocatedAmount?: number;
 }
 
 interface OrgOpt { id: string; name: string; bankAccounts?: Array<{ id: string; bankName: string; bik: string; isDefault: boolean }> }
 interface CpOpt { id: string; name: string; inn: string }
-interface InvOpt { id: string; number: string; total: string; status: string; counterpartyId: string }
+interface InvOpt { id: string; number: string; total: string; status: string; counterpartyId: string; organizationId: string; date: string }
 
 const paymentSchema = z.object({
   organizationId: z.string().uuid("Выберите организацию"),
   counterpartyId: z.string().uuid().optional().or(z.literal("")),
   bankAccountId: z.string().uuid().optional().or(z.literal("")),
+  // Quick mode: один счёт
   invoiceId: z.string().uuid().optional().or(z.literal("")),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата ГГГГ-ММ-ДД"),
   amount: z.coerce.number().positive("Сумма должна быть > 0"),
@@ -96,6 +106,7 @@ export function PaymentsPage() {
       qc.invalidateQueries({ queryKey: ["payments"] });
       qc.invalidateQueries({ queryKey: ["invoices"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["counterparty-statement"] });
     },
     onError: (e) => handleApiError(e, "Не удалось удалить"),
   });
@@ -152,11 +163,7 @@ export function PaymentsPage() {
             cell: (p) => (
               <div>
                 <div className="truncate max-w-md text-sm">{p.purpose ?? "—"}</div>
-                {p.allocations && p.allocations.length > 0 ? (
-                  <div className="text-xs text-muted-foreground">
-                    → {p.allocations.map((a) => a.invoice?.number ?? "?").join(", ")}
-                  </div>
-                ) : null}
+                {renderAllocationsSummary(p)}
               </div>
             ),
           },
@@ -207,9 +214,28 @@ export function PaymentsPage() {
             qc.invalidateQueries({ queryKey: ["payments"] });
             qc.invalidateQueries({ queryKey: ["invoices"] });
             qc.invalidateQueries({ queryKey: ["dashboard"] });
+            qc.invalidateQueries({ queryKey: ["counterparty-statement"] });
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function renderAllocationsSummary(p: Payment) {
+  const allocs = p.allocations ?? [];
+  const unalloc = p.unallocatedAmount ?? 0;
+  if (allocs.length === 0 && unalloc <= 0) return null;
+  return (
+    <div className="text-xs text-muted-foreground flex flex-wrap gap-1 mt-0.5">
+      {allocs.length === 1 ? (
+        <span>→ {allocs[0]!.invoice.number}</span>
+      ) : allocs.length > 1 ? (
+        <span className="inline-flex items-center gap-1">
+          <Layers className="h-3 w-3" /> {allocs.length} счёт{allocs.length === 2 ? "а" : allocs.length > 4 ? "ов" : "а"}
+        </span>
+      ) : null}
+      {unalloc > 0 ? <Badge variant="secondary" className="h-5">Аванс {formatAmount(unalloc)} ₽</Badge> : null}
     </div>
   );
 }
@@ -230,11 +256,24 @@ export function PaymentDialog({
   const cps = useQuery({ queryKey: ["cps-opts"], queryFn: async () => (await api.get<{ items: CpOpt[] }>("/counterparties", { params: { pageSize: 200 } })).data.items });
   const invoices = useQuery({
     queryKey: ["invoices-opts"],
-    queryFn: async () => (await api.get<{ items: InvOpt[] }>("/invoices", { params: { pageSize: 200 } })).data.items,
+    queryFn: async () => (await api.get<{ items: InvOpt[] }>("/invoices", { params: { pageSize: 500 } })).data.items,
   });
 
-  // Preset: если открыли диалог из счёта — подставим invoiceId, counterpartyId, organizationId, amount
   const presetInvoice = invoices.data?.find((i) => i.id === presetInvoiceId);
+
+  // Если у платежа уже несколько аллокаций — режим distribute, иначе single
+  const initialMode: "single" | "distribute" =
+    payment && (payment.allocations?.length ?? 0) > 1 ? "distribute" : "single";
+  const [mode, setMode] = useState<"single" | "distribute">(initialMode);
+
+  // allocations при distribute: map invoiceId -> amount (строкой для свободного ввода)
+  const [allocAmounts, setAllocAmounts] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    if (payment?.allocations) {
+      for (const a of payment.allocations) init[a.invoiceId] = String(a.amount);
+    }
+    return init;
+  });
 
   const form = useForm<PaymentForm>({
     resolver: zodResolver(paymentSchema),
@@ -243,7 +282,7 @@ export function PaymentDialog({
           organizationId: payment.organizationId,
           counterpartyId: payment.counterpartyId ?? "",
           bankAccountId: payment.bankAccountId ?? "",
-          invoiceId: payment.allocations?.[0]?.invoiceId ?? "",
+          invoiceId: (payment.allocations?.length ?? 0) === 1 ? (payment.allocations?.[0]?.invoiceId ?? "") : "",
           date: payment.date.slice(0, 10),
           amount: parseFloat(payment.amount),
           direction: payment.direction,
@@ -257,21 +296,98 @@ export function PaymentDialog({
             ...blank(),
             invoiceId: presetInvoice.id,
             counterpartyId: presetInvoice.counterpartyId,
+            organizationId: presetInvoice.organizationId,
             amount: parseFloat(presetInvoice.total),
           }
         : blank(),
   });
 
+  const orgId = form.watch("organizationId");
+  const cpId = form.watch("counterpartyId");
+  const totalAmount = Number(form.watch("amount")) || 0;
+
+  // Кандидаты для distribute: неоплаченные счета выбранного контрагента и организации
+  const candidateInvoices = useMemo(() => {
+    if (!invoices.data) return [] as InvOpt[];
+    return invoices.data
+      .filter((i) => i.status !== "PAID" && i.status !== "CANCELLED")
+      .filter((i) => !orgId || i.organizationId === orgId)
+      .filter((i) => !cpId || i.counterpartyId === cpId)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+  }, [invoices.data, orgId, cpId]);
+
+  const allocatedSum = useMemo(() => {
+    let s = 0;
+    for (const inv of candidateInvoices) {
+      const v = parseFloat(allocAmounts[inv.id] ?? "");
+      if (isFinite(v) && v > 0) s += v;
+    }
+    return Math.round(s * 100) / 100;
+  }, [allocAmounts, candidateInvoices]);
+
+  const unallocated = Math.round((totalAmount - allocatedSum) * 100) / 100;
+
+  // Если при переключении контрагента/организации в режиме distribute счёт исчез из кандидатов — снимаем для него аллокацию
+  useEffect(() => {
+    if (mode !== "distribute") return;
+    const visible = new Set(candidateInvoices.map((c) => c.id));
+    setAllocAmounts((prev) => {
+      const next: Record<string, string> = {};
+      for (const k of Object.keys(prev)) if (visible.has(k)) next[k] = prev[k]!;
+      return next;
+    });
+  }, [mode, candidateInvoices]);
+
+  function autoDistribute() {
+    if (totalAmount <= 0) {
+      toast.error("Сначала укажите сумму платежа");
+      return;
+    }
+    let remaining = totalAmount;
+    const next: Record<string, string> = {};
+    for (const inv of candidateInvoices) {
+      const total = parseFloat(inv.total);
+      // НЕ знаем текущий paid через invoice-options endpoint — берём total как остаток.
+      // Backend всё равно проверит overpay. Это упрощение для UI.
+      const take = Math.min(remaining, total);
+      if (take > 0) {
+        next[inv.id] = take.toFixed(2);
+        remaining = Math.round((remaining - take) * 100) / 100;
+        if (remaining <= 0.005) break;
+      }
+    }
+    setAllocAmounts(next);
+  }
+
   async function onSubmit(v: PaymentForm) {
-    const payload = {
-      ...v,
+    const payload: Record<string, unknown> = {
+      organizationId: v.organizationId,
       counterpartyId: v.counterpartyId || null,
       bankAccountId: v.bankAccountId || null,
-      invoiceId: v.invoiceId || null,
+      date: v.date,
+      amount: v.amount,
+      direction: v.direction,
+      method: v.method,
       purpose: v.purpose || null,
       reference: v.reference || null,
       notes: v.notes || null,
     };
+
+    if (mode === "single") {
+      payload.invoiceId = v.invoiceId || null;
+    } else {
+      const allocations: Array<{ invoiceId: string; amount: number }> = [];
+      for (const inv of candidateInvoices) {
+        const a = parseFloat(allocAmounts[inv.id] ?? "");
+        if (isFinite(a) && a > 0) allocations.push({ invoiceId: inv.id, amount: a });
+      }
+      payload.allocations = allocations;
+      if (allocations.length > 0 && allocatedSum > totalAmount + 0.005) {
+        toast.error("Распределённая сумма больше суммы платежа");
+        return;
+      }
+    }
+
     try {
       if (isNew) {
         await api.post("/payments", payload);
@@ -286,7 +402,6 @@ export function PaymentDialog({
     }
   }
 
-  // При выборе организации — подставим её default bank account
   function onOrgChange(orgId: string) {
     form.setValue("organizationId", orgId);
     const o = orgs.data?.find((x) => x.id === orgId);
@@ -294,20 +409,20 @@ export function PaymentDialog({
     if (defAcc) form.setValue("bankAccountId", defAcc.id);
   }
 
-  // При выборе счёта — подставим контрагента, сумму, организацию
   function onInvoiceChange(invId: string) {
     form.setValue("invoiceId", invId);
     if (!invId) return;
     const inv = invoices.data?.find((i) => i.id === invId);
     if (inv) {
       form.setValue("counterpartyId", inv.counterpartyId);
-      form.setValue("amount", parseFloat(inv.total));
+      form.setValue("organizationId", inv.organizationId);
+      if (form.getValues("amount") <= 0) form.setValue("amount", parseFloat(inv.total));
     }
   }
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isNew ? "Новый платёж" : "Редактирование платежа"}</DialogTitle>
         </DialogHeader>
@@ -344,20 +459,6 @@ export function PaymentDialog({
             </Select>
           </FormField>
 
-          <FormField label="Счёт на оплату (опционально — закрывает этот счёт)">
-            <Select value={form.watch("invoiceId") || "none"} onValueChange={(v) => onInvoiceChange(v === "none" ? "" : v)}>
-              <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">— без привязки —</SelectItem>
-                {invoices.data?.filter((i) => i.status !== "PAID" && i.status !== "CANCELLED").map((i) => (
-                  <SelectItem key={i.id} value={i.id}>
-                    {i.number} — {formatAmount(i.total)} ₽ ({i.status})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FormField>
-
           <FormField label="Контрагент (плательщик)">
             <Select value={form.watch("counterpartyId") || "none"} onValueChange={(v) => form.setValue("counterpartyId", v === "none" ? "" : v)}>
               <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
@@ -383,6 +484,104 @@ export function PaymentDialog({
           <FormField label="Назначение платежа">
             <Textarea rows={2} {...form.register("purpose")} placeholder="Оплата по счёту № ..." />
           </FormField>
+
+          {/* Распределение */}
+          {form.watch("direction") === "IN" ? (
+            <div className="rounded-md border p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Распределение по счетам</div>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    variant={mode === "single" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setMode("single")}
+                  >
+                    Один счёт
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={mode === "distribute" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setMode("distribute")}
+                  >
+                    Несколько счетов
+                  </Button>
+                </div>
+              </div>
+
+              {mode === "single" ? (
+                <FormField label="Счёт (закрывается полностью на сумму платежа)">
+                  <Select value={form.watch("invoiceId") || "none"} onValueChange={(v) => onInvoiceChange(v === "none" ? "" : v)}>
+                    <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— без привязки (аванс) —</SelectItem>
+                      {candidateInvoices.map((i) => (
+                        <SelectItem key={i.id} value={i.id}>
+                          {i.number} — {formatAmount(i.total)} ₽ ({i.status})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <Button type="button" variant="outline" size="sm" onClick={autoDistribute}>
+                      <Wand2 className="h-3 w-3" /> Распределить автоматически
+                    </Button>
+                    <div className="flex gap-3 font-mono">
+                      <span className="text-muted-foreground">Платёж: <b className="text-foreground">{formatAmount(totalAmount)} ₽</b></span>
+                      <span className="text-muted-foreground">Распределено: <b className="text-foreground">{formatAmount(allocatedSum)} ₽</b></span>
+                      <span className={unallocated > 0 ? "text-blue-700" : unallocated < 0 ? "text-red-700" : "text-muted-foreground"}>
+                        {unallocated > 0 ? `Аванс: ${formatAmount(unallocated)} ₽` : unallocated < 0 ? `Превышение: ${formatAmount(-unallocated)} ₽` : "0,00 ₽"}
+                      </span>
+                    </div>
+                  </div>
+                  {candidateInvoices.length === 0 ? (
+                    <div className="text-xs text-muted-foreground py-2">
+                      Нет неоплаченных счетов выбранного контрагента и организации.
+                    </div>
+                  ) : (
+                    <div className="border rounded-md max-h-72 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/40 sticky top-0">
+                          <tr className="text-left">
+                            <th className="p-2 w-28">№</th>
+                            <th className="p-2 w-24">Дата</th>
+                            <th className="p-2 text-right w-28">Сумма счёта</th>
+                            <th className="p-2 w-24">Статус</th>
+                            <th className="p-2 text-right w-36">К распределению</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {candidateInvoices.map((i) => (
+                            <tr key={i.id} className="border-b last:border-0">
+                              <td className="p-2 font-mono">{i.number}</td>
+                              <td className="p-2 text-muted-foreground">{formatDate(i.date)}</td>
+                              <td className="p-2 text-right font-mono">{formatAmount(i.total)}</td>
+                              <td className="p-2"><Badge variant="outline">{i.status}</Badge></td>
+                              <td className="p-2 text-right">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  className="text-right font-mono h-8"
+                                  value={allocAmounts[i.id] ?? ""}
+                                  onChange={(e) => setAllocAmounts((prev) => ({ ...prev, [i.id]: e.target.value }))}
+                                  placeholder="0,00"
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : null}
 
           <FormField label="Заметки">
             <Textarea rows={2} {...form.register("notes")} />

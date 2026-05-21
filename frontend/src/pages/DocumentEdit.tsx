@@ -161,7 +161,7 @@ export function DocumentEditPage({ kind }: { kind: DocKind }) {
   // Платежи по счёту (только для invoices)
   const paymentsByInvoice = useQuery({
     queryKey: ["invoice-payments", id],
-    queryFn: async () => (await api.get<{ total: number; paid: number; balance: number; allocations: Array<{ id: string; amount: string; payment: { id: string; date: string; method: string; reference: string | null } }> }>(`/payments/by-invoice/${id}`)).data,
+    queryFn: async () => (await api.get<{ total: number; paid: number; balance: number; allocations: Array<{ id: string; amount: number; payment: { id: string; date: string; method: string; reference: string | null; amount: number; counterparty?: { id: string; name: string } | null } }> }>(`/payments/by-invoice/${id}`)).data,
     enabled: !isNew && kind === "invoices",
   });
 

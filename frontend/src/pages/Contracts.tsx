@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,11 +78,14 @@ export function ContractsPage() {
   const [q, setQ] = useState("");
   const dq = useDebouncedValue(q, 300);
   const [editing, setEditing] = useState<Contract | "new" | null>(null);
+  const [sort, setSort] = useUrlSort({ field: "date", dir: "desc" });
 
   const list = useQuery({
-    queryKey: ["contracts", { page, q: dq }],
+    queryKey: ["contracts", { page, q: dq, sort }],
     queryFn: async () =>
-      (await api.get<Page<Contract>>("/contracts", { params: { page, pageSize: 20, q: dq || undefined } })).data,
+      (await api.get<Page<Contract>>("/contracts", {
+        params: { page, pageSize: 20, q: dq || undefined, sort: sortQueryParam(sort) },
+      })).data,
   });
 
   const remove = useMutation({
@@ -106,9 +110,12 @@ export function ContractsPage() {
         searchPlaceholder="Номер или предмет"
         loading={list.isLoading}
         empty="Договоров пока нет"
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
           {
             key: "number", header: "№ / Дата",
+            sortKey: "number",
             cell: (c) => (
               <div className="flex items-center gap-2">
                 <FileSignature className="h-4 w-4 text-muted-foreground" />

@@ -3,6 +3,8 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { innSchema, kppSchema, ogrnSchema, paginationSchema, parseSort, paginate } from "../lib/validators.js";
+import { buildCounterpartyStatement } from "../lib/counterparty-statement.js";
+import { Errors } from "../lib/api-error.js";
 
 const orgTypeEnum = z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]);
 
@@ -83,6 +85,24 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
     const cp = await prisma.counterparty.findFirst({ where: { id, userId: request.user.sub } });
     if (!cp) return reply.code(404).send({ error: "NotFound" });
     return cp;
+  });
+
+  // Агрегированная выписка по контрагенту: реквизиты + связанные документы + тоталы
+  app.get("/:id/statement", async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { organizationId } = z
+      .object({ organizationId: z.string().uuid().optional() })
+      .parse(request.query);
+    try {
+      return await buildCounterpartyStatement({
+        userId: request.user.sub,
+        counterpartyId: id,
+        organizationId: organizationId ?? null,
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === "NotFound") throw Errors.notFound("Контрагент");
+      throw err;
+    }
   });
 
   app.post("/", async (request, reply) => {

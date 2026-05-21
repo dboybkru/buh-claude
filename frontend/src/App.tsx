@@ -10,6 +10,7 @@ import { RegisterPage } from "@/pages/Register";
 import { DashboardPage } from "@/pages/Dashboard";
 import { OrganizationsPage } from "@/pages/Organizations";
 import { CounterpartiesPage } from "@/pages/Counterparties";
+import { CounterpartyDetailPage } from "@/pages/CounterpartyDetail";
 import { NomenclaturePage } from "@/pages/Nomenclature";
 import { ContractsPage } from "@/pages/Contracts";
 import { DocumentsListPage } from "@/pages/DocumentsList";
@@ -42,6 +43,7 @@ export function App() {
 
                 <Route path="/organizations" element={<OrganizationsPage />} />
                 <Route path="/counterparties" element={<CounterpartiesPage />} />
+                <Route path="/counterparties/:id" element={<CounterpartyDetailPage />} />
                 <Route path="/nomenclature" element={<NomenclaturePage />} />
                 <Route path="/contracts" element={<ContractsPage />} />
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, Edit, Users, Search } from "lucide-react";
@@ -11,6 +12,7 @@ import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { isValidInn, isValidKpp, isValidOgrn } from "@/lib/checksums";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,15 +72,19 @@ function blankCp(): CpForm {
 
 export function CounterpartiesPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const dq = useDebouncedValue(q, 300);
   const [editing, setEditing] = useState<Counterparty | "new" | null>(null);
+  const [sort, setSort] = useUrlSort();
 
   const list = useQuery({
-    queryKey: ["counterparties", { page, q: dq }],
+    queryKey: ["counterparties", { page, q: dq, sort }],
     queryFn: async () =>
-      (await api.get<Page<Counterparty>>("/counterparties", { params: { page, pageSize: 20, q: dq || undefined } })).data,
+      (await api.get<Page<Counterparty>>("/counterparties", {
+        params: { page, pageSize: 20, q: dq || undefined, sort: sortQueryParam(sort) },
+      })).data,
   });
 
   const remove = useMutation({
@@ -106,11 +112,14 @@ export function CounterpartiesPage() {
         searchPlaceholder="Название или ИНН"
         loading={list.isLoading}
         empty="Контрагентов пока нет"
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
           { key: "type", header: "Тип", width: "60px", cell: (c) => <Badge variant="outline">{c.type}</Badge> },
           {
             key: "name",
             header: "Контрагент",
+            sortKey: "name",
             cell: (c) => (
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
@@ -121,7 +130,7 @@ export function CounterpartiesPage() {
               </div>
             ),
           },
-          { key: "inn", header: "ИНН/КПП", width: "180px", cell: (c) => <span className="font-mono text-sm">{c.inn}{c.kpp ? `/${c.kpp}` : ""}</span> },
+          { key: "inn", header: "ИНН/КПП", width: "180px", sortKey: "inn", cell: (c) => <span className="font-mono text-sm">{c.inn}{c.kpp ? `/${c.kpp}` : ""}</span> },
           { key: "status", header: "", width: "100px", cell: (c) => c.isActive ? null : <Badge variant="secondary">архив</Badge> },
           {
             key: "actions",
@@ -130,15 +139,15 @@ export function CounterpartiesPage() {
             align: "right",
             cell: (c) => (
               <div className="flex gap-1 justify-end">
-                <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setEditing(c); }}><Edit className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); if (confirm(`Удалить ${c.name}?`)) remove.mutate(c.id); }}>
+                <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setEditing(c); }} aria-label="Редактировать"><Edit className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); if (confirm(`Удалить ${c.name}?`)) remove.mutate(c.id); }} aria-label="Удалить">
                   <Trash2 className="h-4 w-4 text-destructive" />
                 </Button>
               </div>
             ),
           },
         ]}
-        onRowClick={(c) => setEditing(c)}
+        onRowClick={(c) => navigate(`/counterparties/${c.id}`)}
       />
 
       {editing ? (

@@ -11,6 +11,7 @@ import { handleApiError } from "@/lib/errors";
 import { useDebouncedValue } from "@/lib/hooks";
 import { fetchAuthorizedBlob, triggerDownload } from "@/lib/download";
 import { DataTable, type Page } from "@/components/DataTable";
+import { useUrlSort, sortQueryParam } from "@/lib/use-sort";
 import { PdfPreviewDialog } from "@/components/PdfPreviewDialog";
 import { FormField } from "@/pages/Organizations";
 import { Button } from "@/components/ui/button";
@@ -73,10 +74,13 @@ export function ReconciliationsPage() {
   const [creating, setCreating] = useState(false);
   const [previewActId, setPreviewActId] = useState<string | null>(null);
 
+  const [sort, setSort] = useUrlSort({ field: "date", dir: "desc" });
   const list = useQuery({
-    queryKey: ["reconciliations", { page, q: dq }],
+    queryKey: ["reconciliations", { page, q: dq, sort }],
     queryFn: async () =>
-      (await api.get<Page<ReconciliationAct>>("/reconciliations", { params: { page, pageSize: 20, q: dq || undefined } })).data,
+      (await api.get<Page<ReconciliationAct>>("/reconciliations", {
+        params: { page, pageSize: 20, q: dq || undefined, sort: sortQueryParam(sort) },
+      })).data,
   });
 
   const remove = useMutation({
@@ -113,10 +117,13 @@ export function ReconciliationsPage() {
         searchPlaceholder="Номер или контрагент"
         loading={list.isLoading}
         empty="Актов сверки пока нет. Нажмите «Сформировать акт»."
+        sort={sort}
+        onSortChange={(next) => { setSort(next); setPage(1); }}
         columns={[
           {
             key: "number",
             header: "№ акта",
+            sortKey: "number",
             cell: (r) => (
               <div className="flex items-center gap-2">
                 <BookCheck className="h-4 w-4 text-muted-foreground" />
@@ -128,7 +135,7 @@ export function ReconciliationsPage() {
             ),
           },
           { key: "cp", header: "Контрагент", cell: (r) => <div>{r.counterparty?.name ?? "—"}<div className="text-xs text-muted-foreground">{r.counterparty?.inn}</div></div> },
-          { key: "period", header: "Период", width: "200px", cell: (r) => <span className="text-sm">{formatDate(r.periodFrom)} — {formatDate(r.periodTo)}</span> },
+          { key: "period", header: "Период", width: "200px", sortKey: "periodTo", cell: (r) => <span className="text-sm">{formatDate(r.periodFrom)} — {formatDate(r.periodTo)}</span> },
           {
             key: "closing",
             header: "Сальдо",

@@ -58,3 +58,6 @@ coverage/
 .cache/
 .parcel-cache/
 .turbo/
+
+# Knowledge graph (graphify)
+graphify-out/
