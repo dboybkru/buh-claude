@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Bot, Send, Loader2, Check, X, FileText, Users, AlertTriangle, FileCheck, FileSignature, BarChart3 } from "lucide-react";
@@ -133,6 +133,16 @@ interface ConfirmResult {
 
 interface OrgOpt { id: string; name: string; inn: string }
 
+interface AuditLogEntry {
+  id: string;
+  createdAt: string;
+  actionType: ActionType;
+  targetType: TargetType;
+  targetId: string | null;
+  organizationId: string | null;
+  actionPlan: { id: string; message: string; status: string } | null;
+}
+
 /* ---------- page ---------- */
 
 export function AiChatPage() {
@@ -157,6 +167,14 @@ export function AiChatPage() {
   if (!organizationId && orgList.length > 0 && !orgs.isLoading) {
     setOrganizationId(orgList[0]!.id);
   }
+
+  const auditLog = useQuery({
+    queryKey: ["ai-audit-log", organizationId],
+    queryFn: async () => (await api.get<{ items: AuditLogEntry[] }>("/ai/audit-log", {
+      params: { organizationId: organizationId || undefined, limit: 50 },
+    })).data.items,
+    enabled: !!organizationId,
+  });
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
@@ -204,6 +222,7 @@ export function AiChatPage() {
       qc.invalidateQueries({ queryKey: ["contracts"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["cps-opts"] });
+      qc.invalidateQueries({ queryKey: ["ai-audit-log"] });
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -280,17 +299,19 @@ export function AiChatPage() {
         </Card>
       ) : null}
 
-      {currentPlan && !confirmResult ? (
+      {currentPlan && (!confirmResult || confirmResult.errors.length > 0) ? (
         <ActionPlanCard
           plan={currentPlan.plan}
           confirming={confirming}
-          disableConfirm={hasCriticalMissing || !hasActions}
+          disableConfirm={hasCriticalMissing || !hasActions || !!confirmResult}
           onConfirm={confirm}
           onReject={reject}
         />
       ) : null}
 
       {confirmResult ? <ConfirmResultCard result={confirmResult} onClose={reject} /> : null}
+
+      <AuditLogCard items={auditLog.data ?? []} loading={auditLog.isLoading} />
 
       <form onSubmit={send} className="flex gap-2 sticky bottom-0 bg-background py-3">
         <Textarea
@@ -315,6 +336,23 @@ export function AiChatPage() {
 
 /* ---------- subcomponents ---------- */
 
+const READ_ONLY_ACTION_TYPES: ActionType[] = ["analyze_debt"];
+
+function isReadOnly(t: ActionType): boolean {
+  return READ_ONLY_ACTION_TYPES.includes(t);
+}
+
+interface ConfidenceLevel {
+  label: string;
+  variant: "default" | "secondary" | "warning";
+}
+
+function confidenceLevel(c: number): ConfidenceLevel {
+  if (c >= 0.85) return { label: `высокий ${c.toFixed(2)}`, variant: "default" };
+  if (c >= 0.6) return { label: `средний ${c.toFixed(2)}`, variant: "secondary" };
+  return { label: `низкий ${c.toFixed(2)} — проверьте план внимательно`, variant: "warning" };
+}
+
 function ActionPlanCard({
   plan, confirming, disableConfirm, onConfirm, onReject,
 }: {
@@ -324,14 +362,28 @@ function ActionPlanCard({
   onConfirm: () => void;
   onReject: () => void;
 }) {
+  const conf = confidenceLevel(plan.confidence);
+  const allReadOnly = plan.actions.length > 0 && plan.actions.every((a) => isReadOnly(a.type));
+  const hasWriteActions = plan.actions.some((a) => !isReadOnly(a.type));
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base flex items-center justify-between">
+        <CardTitle className="text-base flex items-center justify-between flex-wrap gap-2">
           <span className="flex items-center gap-2">
             <Bot className="h-4 w-4" /> AI предлагает план
           </span>
-          <Badge variant="outline">confidence {plan.confidence.toFixed(2)}</Badge>
+          <div className="flex gap-2 flex-wrap">
+            <Badge variant={conf.variant} title="Уровень уверенности модели">{conf.label}</Badge>
+            {hasWriteActions ? (
+              <Badge variant="warning" title="Действия изменят данные после подтверждения">
+                Создаст данные после подтверждения
+              </Badge>
+            ) : allReadOnly ? (
+              <Badge variant="secondary" title="Только анализ — данные не изменяются">
+                Только анализ, данные не изменяются
+              </Badge>
+            ) : null}
+          </div>
         </CardTitle>
         <CardDescription>{plan.summary}</CardDescription>
       </CardHeader>
@@ -363,9 +415,10 @@ function ActionPlanCard({
 
         <Separator />
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button size="sm" onClick={onConfirm} disabled={confirming || disableConfirm}>
-            {confirming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Подтвердить
+            {confirming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Подтвердить действия
           </Button>
           <Button size="sm" variant="outline" onClick={onReject}>
             <X className="h-3.5 w-3.5" /> Отклонить
@@ -474,11 +527,21 @@ function ConfirmResultCard({ result, onClose }: { result: ConfirmResult; onClose
         {result.applied.length > 0 ? (
           <div>
             <div className="font-semibold text-emerald-700">✓ Применено ({result.applied.length}):</div>
-            <ul className="ml-3 text-xs">
+            <ul className="ml-3 text-xs space-y-0.5">
               {result.applied.map((a) => (
                 <li key={a.id}>
                   • {labelFor(a.actionType)}
-                  {a.targetId ? <> → {a.targetType} id <span className="font-mono">{a.targetId}</span></> : <> → read-only</>}
+                  {a.targetId ? (
+                    <>
+                      {" → "}
+                      <Link to={routeFor(a.targetType, a.targetId)} className="underline underline-offset-2 hover:no-underline">
+                        Открыть {labelForTarget(a.targetType)}
+                      </Link>
+                      <span className="text-muted-foreground"> (id <span className="font-mono">{a.targetId.slice(0, 8)}…</span>)</span>
+                    </>
+                  ) : (
+                    <> → <span className="text-muted-foreground">read-only (без созданной сущности)</span></>
+                  )}
                 </li>
               ))}
             </ul>
@@ -515,6 +578,72 @@ function labelFor(t: ActionType): string {
     case "create_act_from_invoice": return "Создание акта по счёту";
     case "create_contract": return "Создание договора";
     case "analyze_debt": return "Анализ задолженности";
+  }
+}
+
+function AuditLogCard({ items, loading }: { items: AuditLogEntry[]; loading: boolean }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">История AI-действий</CardTitle>
+        <CardDescription>
+          Подтверждённые действия по выбранной организации. Read-only: вы видите только свои данные.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Загрузка истории...
+          </div>
+        ) : items.length === 0 ? (
+          <div className="text-sm text-muted-foreground">Истории нет — выберите организацию и подтвердите хотя бы одно действие.</div>
+        ) : (
+          <ul className="space-y-1.5 text-sm">
+            {items.map((row) => (
+              <li key={row.id} className="border-b last:border-0 pb-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground font-mono">
+                    {new Date(row.createdAt).toLocaleString("ru-RU")}
+                  </span>
+                  <Badge variant="outline">{labelFor(row.actionType)}</Badge>
+                  {row.targetId ? (
+                    <Link to={routeFor(row.targetType, row.targetId)} className="text-xs underline underline-offset-2">
+                      открыть {labelForTarget(row.targetType)}
+                    </Link>
+                  ) : (
+                    <Badge variant="secondary" className="text-[10px]">read-only</Badge>
+                  )}
+                </div>
+                {row.actionPlan?.message ? (
+                  <div className="text-xs text-muted-foreground mt-0.5">«{row.actionPlan.message}»</div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function labelForTarget(t: TargetType): string {
+  switch (t) {
+    case "counterparty": return "контрагента";
+    case "invoice": return "счёт";
+    case "act": return "акт";
+    case "contract": return "договор";
+    case "analysis": return "результат";
+  }
+}
+
+/** Возвращает URL на странице фронта для созданной сущности. */
+function routeFor(t: TargetType, id: string): string {
+  switch (t) {
+    case "counterparty": return `/counterparties/${id}`;
+    case "invoice": return `/invoices/${id}`;
+    case "act": return `/acts/${id}`;
+    case "contract": return `/contracts?focus=${id}`;
+    case "analysis": return "/ai";
   }
 }
 

@@ -140,6 +140,11 @@ export function AiSettingsPage() {
         {data?.configured ? <Badge variant="success">Настроен</Badge> : <Badge variant="secondary">Не настроен</Badge>}
       </div>
 
+      <div className="rounded-md border bg-sky-50 dark:bg-sky-950/30 px-3 py-2 text-sm">
+        <strong>AI не выполняет действия без вашего подтверждения.</strong> Любой запрос превращается в action plan,
+        который вы видите в чате и явно подтверждаете. AI пока не создаёт платежи, не редактирует и не удаляет документы.
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">

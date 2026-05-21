@@ -99,7 +99,7 @@ npm run dev
 cd backend
 npm run typecheck          # tsc --noEmit
 npm run test:unit          # vitest unit (105 тестов): validators/recalc/format/amount-to-words + contract-template/print-warnings/print-settings/uploads/html-preview + ai (schemas/action-plan/mock/prompt — 6A+6B)
-npm run test:integration   # vitest integration (85 тестов): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b
+npm run test:integration   # vitest integration (93 теста): auth/orgs/cps/invoices/payments/lock/bank-import/recon/files/contract-templates/print-warnings/stress-print + ai-flow + ai-sprint6b + ai-sprint6_1
 npm test                   # unit + integration вместе
 npm run build              # tsc -p tsconfig.json
 npm run print:check        # Sprint 5.1: stress-рендер всех PDF/HTML в tmp/print-check/
@@ -268,15 +268,30 @@ POST /api/v1/ai/action-plans/:id/confirm            применить approved 
 
 ### Ручной smoke (Mock provider, без внешней сети)
 
+Полный пошаговый чек-лист с позитивными и негативными сценариями: **[docs/ai-smoke-checklist.md](docs/ai-smoke-checklist.md)** (Sprint 6.1).
+
+Кратко:
+
 1. Открыть `/ai/settings` → выбрать «Mock (dev/test)» → Сохранить.
 2. Нажать «Проверить подключение» — должно вернуть `ok`.
 3. Открыть `/ai` → выбрать организацию (через выпадающий список вверху).
-4. Отправить «**Создай контрагента ООО Ромашка ИНН 7701234567**» → action plan с `create_counterparty`, confidence ≈ 0.92. Подтвердить.
+4. Отправить «**Создай контрагента ООО Ромашка ИНН 7701234567**» → action plan с `create_counterparty`, confidence ≈ 0.92 (badge «высокий»). Подтвердить.
 5. Отправить «**Создай счёт за консультацию 10000 рублей без НДС**» → action plan с `create_invoice`, vatRate=`no_vat`. Подтвердить → счёт появится в **Документы → Счета**.
 6. Отправить «**Создай акт по последнему счёту**» (Sprint 6B) → action plan с `create_act_from_invoice`. Подтвердить → акт появится в **Документы → Акты**. Повторная отправка вернёт ошибку «по счёту уже создан акт».
 7. Отправить «**Создай договор на оказание консультационных услуг**» (Sprint 6B) → action plan с `create_contract`. Подтвердить → договор появится в **Справочники → Договоры** (auto-number `Д-NNN/2026`).
-8. Отправить «**Покажи должников**» (Sprint 6B) → action plan с `analyze_debt`, помечено «не изменяет данные». Подтвердить → виден блок «Задолженность» с totalDebt / overdueDebt / списком должников / рекомендациями.
-9. В **AiAuditLog** должно появиться 5 записей (через `npx prisma studio` или прямой запрос): по одной на каждое подтверждённое действие. У `analyze_debt` `targetId=null`.
+8. Отправить «**Покажи должников**» (Sprint 6B) → action plan с `analyze_debt`, бейдж **«Только анализ, данные не изменяются»**. Подтвердить → виден блок «Задолженность» с totalDebt / overdueDebt / списком должников / рекомендациями.
+9. На странице `/ai` под чатом — блок **«История AI-действий»** (Sprint 6.1): последние 50 подтверждённых действий по выбранной организации, с ссылками на созданные сущности. Для `analyze_debt` targetId=null (read-only).
+10. (опц.) Через API: `GET /api/v1/ai/audit-log?organizationId=<id>` — тот же список, только свои организации.
+
+### Что AI пока НЕ умеет (важно)
+
+- **НЕ** создаёт платежи (`Payment`) и не разносит оплаты (`PaymentAllocation`).
+- **НЕ** импортирует банковскую выписку (это делается вручную через `/bank-import`).
+- **НЕ** редактирует и **НЕ** удаляет существующие документы / контрагентов / договоры.
+- **НЕ** меняет статусы документов или суммы.
+- **НЕ** даёт юридических или налоговых гарантий — это инструмент-помощник.
+
+Эти ограничения закреплены в SYSTEM_PROMPT и в whitelist `ALLOWED_ACTION_TYPES`. Если в одном из этих сценариев AI вернёт action — это бага.
 
 ### Что НЕ входит в Sprint 6A+6B (планируется отдельно)
 

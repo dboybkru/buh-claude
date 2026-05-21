@@ -261,6 +261,40 @@ export async function aiRoutes(app: FastifyInstance) {
     };
   });
 
+  /* -------------- audit log: история AI-действий (Sprint 6.1) -------------- */
+  app.get("/audit-log", async (request) => {
+    const q = z.object({
+      organizationId: z.string().uuid().optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+    }).parse(request.query);
+    const userId = request.user.sub;
+    const where: Prisma.AiAuditLogWhereInput = {
+      userId,
+      ...(q.organizationId ? { organizationId: q.organizationId } : {}),
+    };
+    const items = await prisma.aiAuditLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: q.limit,
+      include: {
+        actionPlan: { select: { id: true, message: true, status: true } },
+      },
+    });
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt,
+        actionType: row.actionType,
+        targetType: row.targetType,
+        targetId: row.targetId,
+        organizationId: row.organizationId,
+        actionPlan: row.actionPlan ? { id: row.actionPlan.id, message: row.actionPlan.message, status: row.actionPlan.status } : null,
+        // payloadJson НЕ возвращаем целиком — может содержать внутренние ссылки;
+        // короткая summary вынесена в actionPlan.message.
+      })),
+    };
+  });
+
   /* -------------- confirm: применить approved actions -------------- */
   app.post("/action-plans/:id/confirm", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -286,6 +320,15 @@ export async function aiRoutes(app: FastifyInstance) {
         data: { status: "FAILED", resultJson: { error: validated.error } as unknown as Prisma.InputJsonValue },
       });
       throw Errors.validation(`ActionPlan повреждён: ${validated.error ?? "?"}`);
+    }
+
+    // Safety: approvedActions может содержать только id из plan.actions
+    if (parsed.data.approvedActions && parsed.data.approvedActions.length > 0) {
+      const planIds = new Set(validated.plan.actions.map((a) => a.id));
+      const unknown = parsed.data.approvedActions.filter((id) => !planIds.has(id));
+      if (unknown.length > 0) {
+        throw Errors.validation(`Неизвестные approvedActions: ${unknown.join(", ")}`);
+      }
     }
 
     const { approved, skipped: notApproved } = selectApprovedActions(validated.plan, parsed.data.approvedActions);

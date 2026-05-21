@@ -93,20 +93,27 @@ describe("Smoke: страницы рендерятся", () => {
     expect(screen.getByText("Акты сверки")).toBeTruthy();
   });
 
-  it("AiSettingsPage (Sprint 6A)", async () => {
+  it("AiSettingsPage (Sprint 6A+6.1)", async () => {
     const { AiSettingsPage } = await import("@/pages/AiSettings");
     renderPage(<AiSettingsPage />);
     // В заголовке либо "AI Ассистент — настройки", либо "Загрузка..."
     expect(document.body.textContent).toMatch(/AI Ассистент|Загрузка/);
+    // Sprint 6.1 — safety-баннер "AI не выполняет действия без вашего подтверждения"
+    expect(document.body.textContent).toMatch(/без вашего подтверждения|Загрузка/);
   });
 
-  it("AiChatPage (Sprint 6A)", async () => {
+  it("AiChatPage (Sprint 6A+6B+6.1)", async () => {
     const { AiChatPage } = await import("@/pages/AiChat");
     renderPage(<AiChatPage />);
     expect(screen.getByText("AI Ассистент")).toBeTruthy();
-    // Должны быть быстрые подсказки про создание контрагента и счёта
+    // Должны быть быстрые подсказки про все 5 поддерживаемых действий
     expect(document.body.textContent).toMatch(/Создай контрагента/);
     expect(document.body.textContent).toMatch(/Создай счёт/);
+    expect(document.body.textContent).toMatch(/Создай акт/);
+    expect(document.body.textContent).toMatch(/Создай договор/);
+    expect(document.body.textContent).toMatch(/Покажи должников/);
+    // Sprint 6.1 — блок «История AI-действий» рендерится (даже пустой)
+    expect(document.body.textContent).toMatch(/История AI-действий/);
   });
 
   it("ImportPage", async () => {
