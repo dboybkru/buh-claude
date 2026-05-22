@@ -382,7 +382,7 @@ npm run print:check
 
 ## Production hardening (Sprint 7)
 
-Sprint 7 подготовил проект к более реальной эксплуатации — без новых бизнес-фич, только устойчивость и диагностика.
+Sprint 7 подготовил проект к более реальной эксплуатации — без новых бизнес-фич, только устойчивость и диагностика. Операционный чек-лист (env, миграции, health, backup, restore, troubleshooting) собран отдельно: **[docs/production-runbook.md](docs/production-runbook.md)**.
 
 ### Env validation
 
@@ -419,9 +419,12 @@ Sprint 7 подготовил проект к более реальной экс
 Скрипты в `scripts/` для PowerShell и bash:
 
 ```powershell
-# Windows / PowerShell
-pwsh scripts/backup-db.ps1               # backups/buhclaude-YYYY-MM-DD_HH-mm-ss.dump
-pwsh scripts/restore-db.ps1 -File backups/buhclaude-2026-05-22_12-00-00.dump
+# Windows / PowerShell (5.1 или pwsh 7+)
+powershell -File scripts/backup-db.ps1                              # → backups/buhclaude-<timestamp>.dump
+powershell -File scripts/restore-db.ps1 -File backups/<file>.dump   # ⚠ --clean удалит public.*
+
+# По умолчанию restore в БД buhclaude. Для безопасного dry-run:
+powershell -File scripts/restore-db.ps1 -File backups/<file>.dump -Database buhclaude_test
 ```
 
 ```bash

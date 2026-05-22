@@ -10,9 +10,8 @@
 #
 # ВНИМАНИЕ: в этом файле НЕТ секретов. Реальные значения JWT_SECRET / POSTGRES_PASSWORD
 # / DADATA_API_KEY должны лежать в .env (исключённом из git) — Docker Compose
-# подхватит их через env_file.
-
-version: "3.8"
+# подхватит их через env_file. НЕ публикуйте вывод `docker compose config` —
+# он раскрывает env_file целиком.
 
 services:
   postgres:

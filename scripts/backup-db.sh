@@ -16,7 +16,7 @@ STAMP=$(date +%Y-%m-%d_%H-%M-%S)
 FILE="$OUT_DIR/${DB}-${STAMP}.dump"
 
 echo "→ Бэкап $DB из контейнера $CONTAINER в $FILE"
-docker exec -t "$CONTAINER" pg_dump -U "$USER" -d "$DB" -Fc --no-owner --no-acl > "$FILE"
+docker exec "$CONTAINER" pg_dump -U "$USER" -d "$DB" -Fc --no-owner --no-acl > "$FILE"
 
 SIZE_KB=$(du -k "$FILE" | cut -f1)
 echo "✓ Бэкап создан (${SIZE_KB} KB): $FILE"

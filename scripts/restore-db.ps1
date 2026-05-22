@@ -1,35 +1,53 @@
-# BuhClaude — restore PostgreSQL дампа в БД через docker exec + pg_restore
-# Использование:
-#   pwsh scripts/restore-db.ps1 -File backups/buhclaude-2026-05-22_12-00-00.dump
-#   pwsh scripts/restore-db.ps1 -File ... -Database buhclaude_test
+# BuhClaude - restore PostgreSQL dump via docker cp + pg_restore
 #
-# ВНИМАНИЕ: restore через --clean удаляет существующие объекты в целевой БД.
-# Перед запуском убедитесь, что вы знаете, куда восстанавливаете.
+# Usage:
+#   powershell -File scripts/restore-db.ps1 -File backups/buhclaude-2026-05-22_12-00-00.dump
+#   powershell -File scripts/restore-db.ps1 -File ... -Database buhclaude_test
+#   pwsh -File scripts/restore-db.ps1 -File ...       # PowerShell 7+ also OK
+#
+# WARNING: --clean removes existing public.* objects in the target database
+# before restoring. Make sure -Database points at the right DB. For a safe
+# dry-run, restore into buhclaude_test instead of the production DB.
 
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
   [string]$File,
   [string]$Container = "buhclaude-postgres",
-  [string]$User      = "buhclaude",
+  [string]$DbUser    = "buhclaude",
   [string]$Database  = "buhclaude"
 )
 
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $File)) {
-  Write-Error "Файл бэкапа не найден: $File"
+  Write-Error "Dump file not found: $File"
   exit 1
 }
 
-Write-Host "→ Восстановление $Database из $File в контейнер $Container" -ForegroundColor Cyan
-Write-Host "  (--clean: существующие объекты будут удалены и пересозданы)" -ForegroundColor Yellow
+$stamp    = Get-Date -Format "yyyyMMddHHmmss"
+$inDocker = "/tmp/buhclaude-restore-$stamp.dump"
 
-# Передаём поток дампа в контейнерный pg_restore через docker exec -i
-Get-Content -Path $File -Encoding Byte -Raw | docker exec -i $Container pg_restore -U $User -d $Database --clean --if-exists --no-owner --no-acl
+Write-Host "-> Restore $Database from $File into container $Container" -ForegroundColor Cyan
+Write-Host "   (--clean: existing public.* objects will be dropped and recreated)" -ForegroundColor Yellow
+
+# Copy dump INTO the container, then run pg_restore there. This avoids the
+# binary-pipe problems with `Get-Content -Encoding Byte | docker exec -i ...`
+# on Windows PowerShell.
+& docker cp $File ("${Container}:${inDocker}")
 if ($LASTEXITCODE -ne 0) {
-  Write-Error "pg_restore завершился с кодом $LASTEXITCODE — проверьте лог выше"
+  Write-Error "docker cp failed (exit $LASTEXITCODE)"
   exit 1
 }
 
-Write-Host "✓ Восстановление завершено успешно." -ForegroundColor Green
+& docker exec $Container pg_restore -U $DbUser -d $Database --clean --if-exists --no-owner --no-acl $inDocker
+$restoreExit = $LASTEXITCODE
+
+& docker exec $Container rm -f $inDocker | Out-Null
+
+if ($restoreExit -ne 0) {
+  Write-Error "pg_restore exited with code $restoreExit - see output above"
+  exit 1
+}
+
+Write-Host "OK Restore completed." -ForegroundColor Green
