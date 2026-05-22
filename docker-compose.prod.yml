@@ -1,69 +1,108 @@
-# BuhClaude — production-like docker-compose overlay (Sprint 7).
+# BuhClaude — production-like docker-compose overlay (Sprint 7 + 8).
 #
-# Использование вместе с docker-compose.yml:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Use together with docker-compose.yml (postgres lives in the base file):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# Что добавляет:
-#   - backend service (build + healthcheck + uploads volume + restart);
-#   - frontend как statically-built артефакт, отдаётся через nginx (опционально);
-#   - postgres без публичного порта (доступен только внутри сети).
+# What this overlay adds on top of the base compose:
+#   - postgres: published port removed (not reachable from host),
+#     restart policy hardened to "always".
+#   - migrate: one-shot container that runs `prisma migrate deploy` once
+#     and exits 0. Backend waits for it via depends_on.
+#   - backend: production Node image (backend/Dockerfile), healthcheck on
+#     /api/v1/health, persistent volume for uploads, restart always.
+#   - frontend: nginx image (frontend/Dockerfile) serving the SPA and
+#     reverse-proxying /api/* to the backend service.
 #
-# ВНИМАНИЕ: в этом файле НЕТ секретов. Реальные значения JWT_SECRET / POSTGRES_PASSWORD
-# / DADATA_API_KEY должны лежать в .env (исключённом из git) — Docker Compose
-# подхватит их через env_file. НЕ публикуйте вывод `docker compose config` —
-# он раскрывает env_file целиком.
+# WARNING: this file contains NO secrets. Real values for JWT_SECRET,
+# POSTGRES_PASSWORD, DADATA_API_KEY etc. must live in backend/.env (or
+# in your deployment platform's secret store) — never commit them.
+# Do not publish the output of `docker compose config` — it dumps env_file
+# in plaintext.
 
 services:
   postgres:
-    # Переопределяем чтобы НЕ выставлять порт наружу в production.
-    ports: []
+    # Do NOT expose the DB to the host in production.
+    # `!reset []` (Compose 2.20+) explicitly drops the inherited port mapping
+    # from docker-compose.yml — a plain `ports: []` is merged with the base
+    # list by compose and the 5432 publish would survive.
+    ports: !reset []
     restart: always
-    # Healthcheck из основного compose уже задан; networks по умолчанию.
+
+  # ── One-shot migrations. Runs `prisma migrate deploy` and exits.
+  # Backend depends on this service completing successfully, so the API
+  # only starts once the schema is up to date. No db push, no seed —
+  # both are intentionally manual in production.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: buhclaude-backend:latest
+    container_name: buhclaude-migrate
+    env_file: backend/.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-buhclaude}:${POSTGRES_PASSWORD:-buhclaude_secret}@postgres:5432/${POSTGRES_DB:-buhclaude}?schema=public"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # `prisma migrate deploy` is idempotent and safe to re-run on every up.
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
 
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile        # ⚠ Dockerfile пока не добавлен — см. README §«Docker production»
+      dockerfile: Dockerfile
     image: buhclaude-backend:latest
     container_name: buhclaude-backend
-    env_file: backend/.env          # содержит DATABASE_URL, JWT_SECRET, CORS_ORIGIN, ...
+    env_file: backend/.env
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3001
-      # DATABASE_URL переопределяется на сервис-имя postgres внутри сети compose
+      UPLOADS_DIR: /app/uploads
+      # Override DATABASE_URL so it points at the postgres service inside
+      # the compose network (host name = service name), not at localhost.
       DATABASE_URL: "postgresql://${POSTGRES_USER:-buhclaude}:${POSTGRES_PASSWORD:-buhclaude_secret}@postgres:5432/${POSTGRES_DB:-buhclaude}?schema=public"
     volumes:
-      - uploads_data:/app/uploads   # сохранение логотипа/печати/подписи между релизами
-    ports:
-      - "${BACKEND_PORT:-3001}:3001"
+      - uploads_data:/app/uploads
+    expose:
+      - "3001"
+    # Backend is reached through nginx by default. If you also want direct
+    # access from the host, uncomment the ports block below.
+    # ports:
+    #   - "${BACKEND_PORT:-3001}:3001"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/api/v1/ready"]
-      interval: 10s
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/v1/health"]
+      interval: 15s
       timeout: 5s
-      retries: 6
+      retries: 4
       start_period: 30s
     restart: always
 
-  # frontend как опциональный nginx со static dist
-  # Закомментировано по умолчанию — обычно frontend деплоится отдельно
-  # (Vercel / Cloudflare Pages / отдельный nginx).
-  #
-  # frontend:
-  #   image: nginx:1.27-alpine
-  #   container_name: buhclaude-frontend
-  #   volumes:
-  #     - ./frontend/dist:/usr/share/nginx/html:ro
-  #     - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-  #   ports:
-  #     - "${FRONTEND_PORT:-8080}:80"
-  #   depends_on:
-  #     backend:
-  #       condition: service_healthy
-  #   restart: always
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: buhclaude-frontend:latest
+    container_name: buhclaude-frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    restart: always
 
 volumes:
   uploads_data:

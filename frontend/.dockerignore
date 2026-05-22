@@ -1,0 +1,22 @@
+node_modules
+dist
+.cache
+coverage
+
+*.tsbuildinfo
+
+# Secrets and local config.
+.env
+.env.*
+!.env.example
+
+# Tests are not needed in the runtime image.
+src/test
+**/*.test.ts
+**/*.test.tsx
+
+# Editor / OS.
+.vscode
+.idea
+.DS_Store
+Thumbs.db

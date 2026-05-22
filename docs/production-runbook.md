@@ -179,22 +179,158 @@ cd backend && npm run print:check
 Артефакты появятся в `tmp/print-check/` (папка в `.gitignore`). Смотрите
 README раздел «Проверка печатных форм» — что глазами проверять.
 
-## 10. Docker production overlay
+## 10. Production-like Docker run (Sprint 8)
+
+Полный «с чистого клона до прохождения smoke» путь — без локальной установки
+Node, только Docker и `git`. Все четыре сервиса (`postgres`, `migrate`,
+`backend`, `frontend`) поднимаются из одного `docker compose`.
+
+### 10.1. Клон + env
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml config   # синтаксис
+git clone https://github.com/dboybkru/buh-claude.git
+cd buh-claude
+
+# 1. Корневой .env (postgres credentials, host port для frontend)
+cp .env.production.example .env
+#    Открыть .env, заменить <REPLACE-WITH-STRONG-DB-PASSWORD>.
+
+# 2. backend/.env (JWT_SECRET, CORS_ORIGIN, …)
+cp backend/.env.production.example backend/.env
+#    Сгенерировать JWT_SECRET:
+openssl rand -hex 32
+#    Вставить в backend/.env вместо <REPLACE-WITH-32-CHAR-RANDOM-SECRET>.
+#    Поправить CORS_ORIGIN на реальный URL.
+```
+
+⚠ Никогда не публикуйте `.env` / `backend/.env`. `docker compose config`
+печатает их в STDOUT — не выкладывайте этот вывод никуда.
+
+### 10.2. Build образов
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+```
+
+Первая сборка ~2-4 минуты (compile TS, prisma generate, vite build).
+Повторные сборки ускоряются благодаря BuildKit cache.
+
+### 10.3. Запуск
+
+```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-Что меняет `docker-compose.prod.yml` по сравнению с базовым:
+Порядок старта (compose обеспечивает через `depends_on` + healthcheck):
+1. `postgres` — поднимается с healthcheck `pg_isready`.
+2. `migrate` — one-shot контейнер, делает `prisma migrate deploy` и выходит 0.
+3. `backend` — стартует только после успешного `migrate` (`service_completed_successfully`).
+4. `frontend` — стартует только после `backend healthy`.
 
-- `backend` сервис c build из `./backend/Dockerfile`, healthcheck по `/api/v1/ready`, restart `always`, volume для uploads;
-- `postgres` без публичного порта (`ports: []`) — доступен только из docker network;
-- pgadmin **не запускается** в prod (запускайте только при необходимости через `docker compose up -d pgadmin`).
+### 10.4. Опциональный seed демо-данных
 
-⚠ **`backend/Dockerfile` пока не добавлен.** Когда будете деплоить — добавьте
-multi-stage Node 20-alpine + `prisma generate` + `tsc`. Без него `compose up`
-для backend упадёт на build.
+В production обычно **не выполняется**. Если хотите наполнить чистую БД
+демо-аккаунтом и образцами:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  run --rm --no-deps backend npx tsx prisma/seed.ts
+```
+
+`--no-deps` нужен, чтобы не дёргать migrate/postgres повторно. `--rm` удаляет
+контейнер после выхода. Seed безопасно запускать **только один раз** — повторный
+запуск упадёт на уникальном индексе `User.email`.
+
+### 10.5. Health / ready
+
+```bash
+# через nginx (рекомендуемый production-путь):
+curl -fsS http://localhost:${FRONTEND_PORT:-8080}/api/v1/health
+curl -fsS http://localhost:${FRONTEND_PORT:-8080}/api/v1/ready
+
+# если открыли порт backend наружу — напрямую:
+curl -fsS http://localhost:3001/api/v1/health
+```
+
+Внутри compose backend всегда доступен по `http://backend:3001`. Nginx делает
+`location /api/ → proxy_pass http://backend:3001`, поэтому одного публичного
+порта frontend достаточно.
+
+### 10.6. Прогон smoke
+
+```bash
+# bash / git-bash
+FRONTEND_URL=http://localhost:8080 ./scripts/prod-smoke.sh
+```
+
+```powershell
+# Windows PowerShell
+powershell -File scripts\prod-smoke.ps1 -FrontendUrl http://localhost:8080
+```
+
+Скрипт читает только URL (никаких креденшалов), проверяет:
+1. `GET /` → 200 + SPA shell с `<div id="root">`.
+2. `GET /login` → 200 (SPA fallback, не 404).
+3. `GET /api/v1/health` → 200, `status=ok`.
+4. `GET /api/v1/ready` → 200, `database=ok`, `uploads=ok`.
+5. `GET /api/v1/auth/me` без токена → 401, в теле **нет stack / секретов**.
+6. Первый hashed `/assets/*.js` из shell отдаётся 200.
+
+Любой провал отображается строкой `FAIL ...` и скрипт выходит с кодом 1.
+
+### 10.7. Backup в проде
+
+См. §7. Скрипты `backup-db.{sh,ps1}` уже совместимы с prod compose:
+`docker exec` идёт в контейнер `buhclaude-postgres`, дамп пишется в
+`backups/` на хосте. Папка в `.gitignore`.
+
+```bash
+./scripts/backup-db.sh
+```
+
+Cron / Windows Scheduled Task:
+- ежедневно в 03:00 локального времени;
+- ротация: 7 daily + 4 weekly + 12 monthly (можно через `tmpreaper` / `logrotate`);
+- хранить дампы вне хоста БД (S3 / другой сервер).
+
+### 10.8. Restore в test DB перед прод-restore
+
+Реальный restore в production обычно делается **в копию**:
+
+```bash
+# 1. Создать целевую БД, если её нет.
+docker exec buhclaude-postgres psql -U buhclaude -d postgres \
+  -c "CREATE DATABASE buhclaude_test;"
+
+# 2. Накатить миграции (если БД пустая).
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  run --rm --no-deps -e DATABASE_URL="postgresql://buhclaude:<DB_PASSWORD>@postgres:5432/buhclaude_test?schema=public" \
+  migrate npx prisma migrate deploy
+
+# 3. Restore в test DB (safe dry-run).
+DB=buhclaude_test ./scripts/restore-db.sh backups/buhclaude-<timestamp>.dump
+
+# 4. Проверить количество строк перед restore в боевую БД.
+docker exec buhclaude-postgres psql -U buhclaude -d buhclaude_test \
+  -c 'SELECT count(*) FROM "User";'
+```
+
+### 10.9. Stop / update / restart
+
+```bash
+# Остановить и сохранить volumes (данные БД и uploads).
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+# Обновить образы и перезапустить.
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# Полное удаление, включая БД и uploads (⚠ необратимо).
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v
+```
+
+`migrate` сервис перезапустится автоматически при `up -d --build` и накатит
+любые новые миграции до старта backend.
 
 ## 11. Troubleshooting
 
@@ -210,17 +346,28 @@ multi-stage Node 20-alpine + `prisma generate` + `tsc`. Без него `compose
 | Frontend bundle > 500 KB warning | Главный chunk должен быть ~410 KB (gzip ~133 KB). Если больше — кто-то импортировал тяжёлую библиотеку синхронно в `App.tsx`. Используйте `React.lazy` для страниц. |
 | PS-скрипты падают с `parse error` / странной кодировкой | На Windows PowerShell 5.1 убедитесь что `*.ps1` сохранены с UTF-8 BOM (текущие в репо — да). Альтернатива: установить PowerShell 7 (`winget install Microsoft.PowerShell`) и запускать через `pwsh`. |
 | `MSYS_NO_PATHCONV` warning в git-bash при работе с `docker cp` | Git-bash на Windows конвертирует `/tmp/...` в `C:/Users/...`. Все скрипты в репо уже учитывают это. При ручных командах — префиксуйте: `MSYS_NO_PATHCONV=1 docker cp ...`. |
+| Порт занят: `Bind for 0.0.0.0:8080 failed: port is already allocated` | Сменить `FRONTEND_PORT` в `.env` или освободить порт (`docker ps`, `netstat -ano \| findstr 8080`). |
+| `backend cannot connect to the database` | Чаще всего — `DATABASE_URL` указывает на `localhost` вместо `postgres` (внутри сети compose host = `postgres`). См. `backend/.env.production.example`. |
+| `migrate` сервис падает с `P1001 / P3000` | БД ещё не готова. compose ждёт `service_healthy`, но если health-check timeout вышел — `docker compose logs migrate`, потом `up -d` ещё раз: команда идемпотентна. |
+| `Cannot find module '@prisma/client'` в backend | Образ собран без `npx prisma generate`. Передобрать: `docker compose ... build --no-cache backend`. |
+| `EACCES: permission denied, open '/app/uploads/...'` | Volume владелец не совпадает с `node` юзером в контейнере. Удалить volume `docker volume rm claude_uploads_data` (⚠ удаляет логотипы/печати) или вручную `docker exec -u root buhclaude-backend chown -R node:node /app/uploads`. |
+| Frontend deep route 404 (`/payments` → nginx 404) | `nginx.conf` потерял `try_files $uri $uri/ /index.html`. Сравните с `frontend/nginx.conf` в репо. |
+| Браузер не видит API: CORS preflight `OPTIONS /api/v1/...` 4xx | `CORS_ORIGIN` в `backend/.env` не содержит реальный origin фронта (включая `https://` и порт). Поправить и `docker compose restart backend`. |
+| `docker compose ps` → backend `(unhealthy)` | `docker compose logs backend` → если zod-ошибка про env: см. строку выше. Если `database error` — postgres ещё не готов. Перезапустить через `docker compose restart backend`. |
+| Бэкап-скрипт падает: `mkdir backups/ permission denied` | Запускаете изнутри docker volume или из read-only монтирования. Запускайте `./scripts/backup-db.sh` **на хосте**, не в контейнере. |
 
 ## 12. Checklist перед продом
 
 - [ ] `JWT_SECRET` сгенерирован случайной строкой ≥ 32 символа, не дефолтный.
 - [ ] `CORS_ORIGIN` указывает на реальный URL фронта.
 - [ ] `NODE_ENV=production` в `backend/.env`.
-- [ ] `backend/Dockerfile` добавлен и проходит `docker build`.
+- [ ] `POSTGRES_PASSWORD` в `.env` заменён на длинный случайный, не дефолтный `buhclaude_secret`.
 - [ ] `docker compose -f docker-compose.yml -f docker-compose.prod.yml config` без warning.
-- [ ] `/api/v1/health` и `/api/v1/ready` отвечают 200.
+- [ ] `docker compose ... build` — backend и frontend образы собрались.
+- [ ] `docker compose ... up -d` — все сервисы healthy через минуту.
+- [ ] `scripts/prod-smoke.sh` (или `.ps1`) зелёный на live стеке.
 - [ ] Сделан и проверен (restore в `buhclaude_test`) первый бэкап.
 - [ ] Настроено cron-расписание backup с ротацией.
 - [ ] `npm run typecheck`, `npm test`, `npm run print:check` зелёные.
-- [ ] Пройден [security-checklist.md](security-checklist.md).
+- [ ] Пройден [security-checklist.md](security-checklist.md), включая раздел Docker/Deployment.
 - [ ] Известные пробелы (rate-limit, CSP, 2FA) — решены или приняты как риск.

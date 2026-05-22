@@ -103,9 +103,33 @@
 | 10.2 | Stack trace в ErrorBoundary показывается ТОЛЬКО в DEV (`import.meta.env.DEV`) | ✅ | `ErrorBoundary.tsx` |
 | 10.3 | Code splitting через `React.lazy` — главный chunk ~410 KB (с 716 KB) | ✅ | Sprint 7 в `App.tsx` |
 
+## 11. Docker / deployment (Sprint 8)
+
+| # | Проверка | Статус | Где |
+|---|---|---|---|
+| 11.1 | `backend/.dockerignore` исключает `.env`, `.env.*` (с allow для `.env.example`) — секреты не попадают в image | ✅ | `backend/.dockerignore` |
+| 11.2 | `frontend/.dockerignore` исключает `.env`, `node_modules`, тесты | ✅ | `frontend/.dockerignore` |
+| 11.3 | Backend контейнер запускается под `USER node` (uid 1000), не root | ✅ | `backend/Dockerfile` |
+| 11.4 | `tini` форвардит SIGTERM в node — graceful shutdown через `app.close()` | ✅ | `backend/Dockerfile` ENTRYPOINT |
+| 11.5 | Backend healthcheck по `/api/v1/health` (no auth, не раскрывает секреты) | ✅ | `backend/Dockerfile` HEALTHCHECK |
+| 11.6 | Frontend healthcheck по `/` (только liveness, без auth) | ✅ | `frontend/Dockerfile` |
+| 11.7 | `postgres` в prod overlay БЕЗ публичного порта (`ports: []`) | ✅ | `docker-compose.prod.yml` |
+| 11.8 | `uploads_data` — named volume, **не внутри image** (отделено от перезапуска) | ✅ | `docker-compose.prod.yml` volumes |
+| 11.9 | nginx: `server_tokens off`, `autoindex off`, deny `/\.` (запрет на dotfiles) | ✅ | `frontend/nginx.conf` |
+| 11.10 | nginx security headers: `X-Content-Type-Options nosniff`, `X-Frame-Options SAMEORIGIN`, `Referrer-Policy strict-origin-when-cross-origin` | ✅ | `frontend/nginx.conf` |
+| 11.11 | nginx SPA fallback `try_files $uri $uri/ /index.html` — последний `location /` | ✅ | `frontend/nginx.conf` |
+| 11.12 | Migrations one-shot service (`migrate`) с `restart: "no"` — НЕ выполняет `seed` и `db push` автоматически | ✅ | `docker-compose.prod.yml` |
+| 11.13 | `backend/.env.production.example` явно требует замены `JWT_SECRET` и `CORS_ORIGIN` (no wildcard) | ✅ | `backend/.env.production.example` |
+| 11.14 | `.env.production.example` явно требует замены `POSTGRES_PASSWORD` | ✅ | `.env.production.example` |
+| 11.15 | `prod-smoke` script проверяет что unauthenticated `/api/v1/auth/me` → 401 БЕЗ stack/секретов в теле | ✅ | `scripts/prod-smoke.{sh,ps1}` |
+| 11.16 | CSP headers через `@fastify/helmet` или nginx CSP | ❌ | TODO для public deploy |
+| 11.17 | Rate-limit (`@fastify/rate-limit`) | ❌ | TODO для public deploy |
+| 11.18 | Secrets через secret-manager (HashiCorp Vault / AWS SSM / docker secrets), не `.env` файл | ⚠ | для self-hosted MVP `backend/.env` приемлемо; для public — переехать |
+| 11.19 | TLS / HTTPS перед nginx (через cloudflare / traefik / caddy) | ⚠ | контейнер слушает 80, TLS терминируется снаружи. Документировать в deploy guide. |
+
 ---
 
-## Что НЕ покрыто в Sprint 7 (явные TODO для production)
+## Что НЕ покрыто (явные TODO для production)
 
 - ❌ **Rate limiting** (например `@fastify/rate-limit`) — добавить перед публичным деплоем.
 - ❌ **CSP headers** через `@fastify/helmet` — добавить.

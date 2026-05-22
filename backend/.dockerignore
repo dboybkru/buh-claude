@@ -1,0 +1,30 @@
+# Keep build context lean and reproducible — never ship host artifacts or secrets.
+node_modules
+dist
+.cache
+tmp
+coverage
+
+# Source-only artefacts that are recreated inside the image.
+*.tsbuildinfo
+
+# Secrets and local config — never bake into the image.
+.env
+.env.*
+!.env.example
+
+# Uploads are mounted as a runtime volume, not part of the image.
+uploads
+
+# Test fixtures and IDE clutter.
+src/test
+**/*.test.ts
+**/*.test.tsx
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Local dev-only Prisma artefacts.
+prisma/migrations/dev.db*
+prisma/dev.db*

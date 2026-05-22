@@ -435,15 +435,30 @@ powershell -File scripts/restore-db.ps1 -File backups/<file>.dump -Database buhc
 
 Папка `backups/` и файлы `*.dump`, `*.sql.gz` исключены из git. **Никогда не коммитьте дампы.**
 
-### Docker production profile
+### Docker production profile (Sprint 8)
+
+Полная stack-связка из четырёх сервисов (`postgres` + one-shot `migrate` + `backend` + `frontend` nginx) — пошаговый run в [docs/production-runbook.md §10](docs/production-runbook.md#10-production-like-docker-run-sprint-8).
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# c чистого клона:
+cp .env.production.example .env                          # → отредактировать POSTGRES_PASSWORD
+cp backend/.env.production.example backend/.env          # → JWT_SECRET (openssl rand -hex 32) + CORS_ORIGIN
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# проверка (URL = http://localhost:${FRONTEND_PORT:-8080}):
+./scripts/prod-smoke.sh                                  # bash / git-bash
+powershell -File scripts/prod-smoke.ps1                  # Windows
 ```
 
-`docker-compose.prod.yml` добавляет backend service с healthcheck, volume для uploads, restart policy, убирает публичный порт postgres. Реальные значения секретов берутся из `backend/.env` (не в git).
+Что внутри overlay:
 
-⚠ Dockerfile для backend пока не добавлен — секция в `docker-compose.prod.yml` помечена как нуждающаяся в `backend/Dockerfile`. Когда добавите — стандартный multi-stage Node 20-alpine + prisma generate + tsc.
+- **`backend/Dockerfile`** — multi-stage Node 20 alpine, `prisma generate` + `tsc`, non-root `USER node`, tini для graceful SIGTERM, healthcheck по `/api/v1/health`. Образ ~250 MB. dev-deps в runtime stage отсутствуют.
+- **`frontend/Dockerfile`** — Vite build → nginx:1.27-alpine со static SPA + reverse proxy `/api/*` → backend, SPA fallback `try_files /index.html`, gzip, security headers. Образ ~76 MB.
+- **`migrate`** service — one-shot контейнер: `npx prisma migrate deploy`, выходит 0. Backend ждёт `service_completed_successfully` перед стартом. Никаких `db push` / автоматического `seed`.
+- **`uploads_data`** — named volume для логотипов/печатей/подписей. Образ остаётся read-only по этому пути.
+- **postgres** — без публичного порта (`ports: []`), доступен только из сети compose.
+
+Секреты — из `backend/.env`. **Никогда не публикуйте вывод `docker compose config`** (он печатает env_file целиком).
 
 ### Frontend resilience
 

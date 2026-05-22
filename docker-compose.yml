@@ -17,11 +17,16 @@ services:
       timeout: 5s
       retries: 10
 
+  # pgAdmin is opt-in: start with `docker compose --profile admin up -d pgadmin`.
+  # Disabled by default so production `up -d` doesn't bring up an admin UI.
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: buhclaude-pgadmin
+    profiles: ["admin"]
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@buhclaude.local}
+      # NOTE: pgadmin4 rejects @buhclaude.local as a "reserved domain". Use
+      # @example.com locally, or a real email in prod.
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
       PGADMIN_CONFIG_SERVER_MODE: "False"
     volumes:
