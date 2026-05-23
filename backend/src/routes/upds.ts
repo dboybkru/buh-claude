@@ -13,6 +13,7 @@ import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
 import { previewUpd } from "../lib/html-preview.js";
 import { computePrintWarnings } from "../lib/print-warnings.js";
+import { getAccessibleUserIds, getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
 import React from "react";
 
 const statusEnum = z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "SIGNED", "PAID", "CANCELLED"]);
@@ -54,9 +55,9 @@ export async function updsRoutes(app: FastifyInstance) {
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
     const status = (request.query as { status?: string }).status;
-    const userId = request.user.sub;
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const where: Prisma.UpdDocumentWhereInput = {
-      userId,
+      organizationId: { in: orgIds },
       ...(status && status !== "all" ? { status: status as Prisma.UpdDocumentWhereInput["status"] } : {}),
       ...(q.q ? { OR: [
         { number: { contains: q.q, mode: "insensitive" } },
@@ -79,8 +80,9 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const upd = await prisma.updDocument.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: { organization: true, counterparty: true, contract: true, invoice: true, items: { orderBy: { sortOrder: "asc" } } },
     });
     if (!upd) return reply.code(404).send({ error: "NotFound" });
@@ -93,22 +95,27 @@ export async function updsRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const data = parsed.data;
 
+    await requireOrgAccess(prisma, userId, data.organizationId, "data:write");
+    const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
     const [org, cp] = await Promise.all([
-      prisma.organization.findFirst({ where: { id: data.organizationId, userId } }),
-      prisma.counterparty.findFirst({ where: { id: data.counterpartyId, userId } }),
+      prisma.organization.findUnique({ where: { id: data.organizationId } }),
+      prisma.counterparty.findFirst({
+        where: { id: data.counterpartyId, userId: { in: accessibleUserIds } },
+      }),
     ]);
     if (!org) return reply.code(400).send({ error: "ValidationError", message: "Организация не найдена" });
     if (!cp) return reply.code(400).send({ error: "ValidationError", message: "Контрагент не найден" });
+    const ownerUserId = org.userId;
 
     const { prepared, totals } = prepareItems(data.items, data.vatIncluded);
     const year = new Date(data.date).getFullYear();
 
     try {
       const created = await prisma.$transaction(async (tx) => {
-        const number = data.number ?? (await nextDocumentNumber(tx, userId, data.organizationId, "UPD", year));
+        const number = data.number ?? (await nextDocumentNumber(tx, ownerUserId, data.organizationId, "UPD", year));
         const upd = await tx.updDocument.create({
           data: {
-            userId,
+            userId: ownerUserId,
             organizationId: data.organizationId,
             counterpartyId: data.counterpartyId,
             contractId: data.contractId ?? null,
@@ -134,7 +141,7 @@ export async function updsRoutes(app: FastifyInstance) {
           },
         });
         await tx.documentItem.createMany({
-          data: prepared.map((it) => itemCreateData(it, userId, "UPD", upd.id)),
+          data: prepared.map((it) => itemCreateData(it, ownerUserId, "UPD", upd.id)),
         });
         return upd;
       });
@@ -153,8 +160,9 @@ export async function updsRoutes(app: FastifyInstance) {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     const userId = request.user.sub;
-    const existing = await prisma.updDocument.findFirst({ where: { id, userId } });
+    const existing = await prisma.updDocument.findFirst({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
+    await requireOrgAccess(prisma, userId, existing.organizationId, "data:write");
     if (isDocStatusLocked(existing.status)) {
       return reply.code(409).send({ error: "Locked", message: `УПД в статусе ${existing.status} нельзя редактировать` });
     }
@@ -167,7 +175,7 @@ export async function updsRoutes(app: FastifyInstance) {
         if (data.items) {
           const { prepared, totals } = prepareItems(data.items, vatIncluded);
           await tx.documentItem.deleteMany({ where: { updId: id } });
-          await tx.documentItem.createMany({ data: prepared.map((it) => itemCreateData(it, userId, "UPD", id)) });
+          await tx.documentItem.createMany({ data: prepared.map((it) => itemCreateData(it, existing.userId, "UPD", id)) });
           totalsPatch = { subtotal: Number(totals.subtotal), vatAmount: Number(totals.vatAmount), total: Number(totals.total) };
         }
         return tx.updDocument.update({
@@ -208,8 +216,9 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.updDocument.findFirst({ where: { id, userId: request.user.sub } });
+    const existing = await prisma.updDocument.findFirst({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "data:write");
     if (isDocStatusLocked(existing.status)) {
       return reply.code(409).send({ error: "Locked", message: `УПД в статусе ${existing.status} нельзя удалить` });
     }
@@ -219,8 +228,9 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.get("/:id/pdf", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const upd = await prisma.updDocument.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -262,8 +272,9 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.get("/:id/preview", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const upd = await prisma.updDocument.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -292,8 +303,9 @@ export async function updsRoutes(app: FastifyInstance) {
 
   app.get("/:id/print-warnings", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const upd = await prisma.updDocument.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,

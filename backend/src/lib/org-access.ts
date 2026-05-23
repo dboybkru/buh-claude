@@ -130,6 +130,28 @@ export async function assertCanWriteData(userId: string): Promise<void> {
 }
 
 /**
+ * Sprint 9B: generalised version of assertCanWriteData(). Asserts the caller
+ * has `permission` in at least one ACTIVE membership. Used by entities that
+ * are organisation-scoped in spirit but don't (yet) carry an organizationId
+ * column — e.g. ContractTemplate without orgId. A user with no memberships
+ * at all is allowed (matches assertCanWriteData onboarding semantics).
+ */
+export async function assertHasPermissionInAnyOrg(
+  userId: string,
+  permission: Permission,
+): Promise<void> {
+  const rows = await prisma.organizationMember.findMany({
+    where: { userId, status: "ACTIVE" },
+    select: { role: true },
+  });
+  if (rows.length === 0) return;
+  for (const r of rows) {
+    if (hasPermission(r.role, permission)) return;
+  }
+  throw Errors.forbidden(`Недостаточно прав (нужно: ${permission})`);
+}
+
+/**
  * Backward-compat helper for "user-scoped" entities that don't have an
  * organizationId column (Counterparty, Nomenclature, ContractTemplate without
  * orgId, AiSettings). Returns the set of userIds whose data the caller can

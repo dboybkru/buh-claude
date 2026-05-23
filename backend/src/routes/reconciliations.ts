@@ -13,6 +13,7 @@ import { buildPdfContext } from "../pdf/context.js";
 import { contentDisposition } from "../lib/http.js";
 import { previewReconciliation } from "../lib/html-preview.js";
 import { computePrintWarnings } from "../lib/print-warnings.js";
+import { getAccessibleUserIds, getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата ГГГГ-ММ-ДД");
 
@@ -43,14 +44,18 @@ function nextNumber(year: number, lastNumber: number): string {
 export async function reconciliationsRoutes(app: FastifyInstance) {
   app.addHook("onRequest", app.authenticate);
 
-  // Превью: расчёт на лету без сохранения
+  // Превью: расчёт на лету без сохранения — VIEWER+ may preview.
   app.get("/preview", async (request) => {
     const q = previewSchema.parse(request.query);
     const userId = request.user.sub;
 
+    await requireOrgAccess(prisma, userId, q.organizationId, "data:read");
+    const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
     const [org, cp] = await Promise.all([
-      prisma.organization.findFirst({ where: { id: q.organizationId, userId } }),
-      prisma.counterparty.findFirst({ where: { id: q.counterpartyId, userId } }),
+      prisma.organization.findUnique({ where: { id: q.organizationId } }),
+      prisma.counterparty.findFirst({
+        where: { id: q.counterpartyId, userId: { in: accessibleUserIds } },
+      }),
     ]);
     if (!org) throw Errors.validation("Организация не найдена");
     if (!cp) throw Errors.validation("Контрагент не найден");
@@ -59,16 +64,18 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
     const to = new Date(q.periodTo);
     if (from > to) throw Errors.validation("Период некорректен: дата начала позже даты окончания");
 
-    const result = await computeReconciliation(userId, q.organizationId, q.counterpartyId, from, to);
+    // Reconciliation aggregates invoices/payments owned by the org's legacy
+    // userId (the OWNER). Use org.userId so accountants see the same data.
+    const result = await computeReconciliation(org.userId, q.organizationId, q.counterpartyId, from, to);
     return { ...result, organization: { id: org.id, name: org.name, inn: org.inn }, counterparty: { id: cp.id, name: cp.name, inn: cp.inn } };
   });
 
   // Список сохранённых актов
   app.get("/", async (request) => {
     const p = paginationSchema.parse(request.query);
-    const userId = request.user.sub;
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const where: Prisma.ReconciliationActWhereInput = {
-      userId,
+      organizationId: { in: orgIds },
       ...(p.q ? {
         OR: [
           { number: { contains: p.q, mode: "insensitive" } },
@@ -96,8 +103,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
   // Один акт
   app.get("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const rec = await prisma.reconciliationAct.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -107,33 +115,38 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
     return rec;
   });
 
-  // Создание (сохранение снимка)
+  // Создание (сохранение снимка) — ACCOUNTANT+
   app.post("/", async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные поля акта сверки", parsed.error.flatten());
     const userId = request.user.sub;
     const data = parsed.data;
 
+    await requireOrgAccess(prisma, userId, data.organizationId, "data:write");
+    const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
     const [org, cp] = await Promise.all([
-      prisma.organization.findFirst({ where: { id: data.organizationId, userId } }),
-      prisma.counterparty.findFirst({ where: { id: data.counterpartyId, userId } }),
+      prisma.organization.findUnique({ where: { id: data.organizationId } }),
+      prisma.counterparty.findFirst({
+        where: { id: data.counterpartyId, userId: { in: accessibleUserIds } },
+      }),
     ]);
     if (!org) throw Errors.validation("Организация не найдена");
     if (!cp) throw Errors.validation("Контрагент не найден");
+    const ownerUserId = org.userId;
 
     const from = new Date(data.periodFrom);
     const to = new Date(data.periodTo);
     if (from > to) throw Errors.validation("Период некорректен");
 
-    const result = await computeReconciliation(userId, data.organizationId, data.counterpartyId, from, to);
+    const result = await computeReconciliation(ownerUserId, data.organizationId, data.counterpartyId, from, to);
     const year = to.getFullYear();
-    const last = await prisma.reconciliationAct.count({ where: { userId, organizationId: data.organizationId } });
+    const last = await prisma.reconciliationAct.count({ where: { userId: ownerUserId, organizationId: data.organizationId } });
     const number = data.number ?? nextNumber(year, last);
 
     try {
       const created = await prisma.reconciliationAct.create({
         data: {
-          userId,
+          userId: ownerUserId,
           organizationId: data.organizationId,
           counterpartyId: data.counterpartyId,
           number,
@@ -161,8 +174,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные поля", parsed.error.flatten());
-    const existing = await prisma.reconciliationAct.findFirst({ where: { id, userId: request.user.sub } });
+    const existing = await prisma.reconciliationAct.findFirst({ where: { id } });
     if (!existing) throw Errors.notFound("Акт сверки");
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "data:write");
     const data = parsed.data;
     try {
       return await prisma.reconciliationAct.update({
@@ -184,8 +198,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.reconciliationAct.findFirst({ where: { id, userId: request.user.sub } });
+    const existing = await prisma.reconciliationAct.findFirst({ where: { id } });
     if (!existing) throw Errors.notFound("Акт сверки");
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "data:write");
     await prisma.reconciliationAct.delete({ where: { id } });
     return { ok: true };
   });
@@ -193,8 +208,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
   // PDF — берётся из сохранённого снимка
   app.get("/:id/pdf", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const rec = await prisma.reconciliationAct.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -230,8 +246,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
 
   app.get("/:id/preview", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const rec = await prisma.reconciliationAct.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -257,8 +274,9 @@ export async function reconciliationsRoutes(app: FastifyInstance) {
 
   app.get("/:id/print-warnings", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const rec = await prisma.reconciliationAct.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,

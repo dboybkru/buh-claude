@@ -12,6 +12,7 @@ import { ContractPdf } from "../pdf/templates/ContractPdf.js";
 import { mapSeller, mapBuyer } from "../pdf/map.js";
 import { buildPdfContext } from "../pdf/context.js";
 import { contentDispositionPdf } from "../pdf/filename.js";
+import { getAccessibleUserIds, getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
 
 const statusEnum = z.enum(["DRAFT", "ACTIVE", "EXPIRED", "TERMINATED"]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата должна быть в формате ГГГГ-ММ-ДД");
@@ -42,26 +43,14 @@ function transformDates<T extends Record<string, unknown>>(d: T): T {
   return result as T;
 }
 
-async function ensureRefsBelongToUser(userId: string, organizationId?: string, counterpartyId?: string) {
-  if (organizationId) {
-    const org = await prisma.organization.findFirst({ where: { id: organizationId, userId } });
-    if (!org) return "Организация не найдена или принадлежит другому пользователю";
-  }
-  if (counterpartyId) {
-    const cp = await prisma.counterparty.findFirst({ where: { id: counterpartyId, userId } });
-    if (!cp) return "Контрагент не найден или принадлежит другому пользователю";
-  }
-  return null;
-}
-
 export async function contractsRoutes(app: FastifyInstance) {
   app.addHook("onRequest", app.authenticate);
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
-    const userId = request.user.sub;
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const where: Prisma.ContractWhereInput = {
-      userId,
+      organizationId: { in: orgIds },
       ...(q.q
         ? {
             OR: [
@@ -90,8 +79,9 @@ export async function contractsRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const c = await prisma.contract.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: { organization: true, counterparty: true },
     });
     if (!c) return reply.code(404).send({ error: "NotFound" });
@@ -102,11 +92,31 @@ export async function contractsRoutes(app: FastifyInstance) {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     const userId = request.user.sub;
-    const refErr = await ensureRefsBelongToUser(userId, parsed.data.organizationId, parsed.data.counterpartyId);
-    if (refErr) return reply.code(400).send({ error: "ValidationError", message: refErr });
+    const data = parsed.data;
+
+    await requireOrgAccess(prisma, userId, data.organizationId, "data:write");
+    const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
+    const [org, cp] = await Promise.all([
+      prisma.organization.findUnique({ where: { id: data.organizationId } }),
+      prisma.counterparty.findFirst({
+        where: { id: data.counterpartyId, userId: { in: accessibleUserIds } },
+      }),
+    ]);
+    if (!org) return reply.code(400).send({ error: "ValidationError", message: "Организация не найдена" });
+    if (!cp) return reply.code(400).send({ error: "ValidationError", message: "Контрагент не найден" });
+    const ownerUserId = org.userId;
+
+    if (data.templateId) {
+      const tpl = await prisma.contractTemplate.findFirst({
+        where: { id: data.templateId, userId: { in: accessibleUserIds } },
+        select: { id: true },
+      });
+      if (!tpl) return reply.code(400).send({ error: "ValidationError", message: "Шаблон договора не найден" });
+    }
+
     try {
       const created = await prisma.contract.create({
-        data: { ...transformDates(parsed.data), userId } as Prisma.ContractUncheckedCreateInput,
+        data: { ...transformDates(data), userId: ownerUserId } as Prisma.ContractUncheckedCreateInput,
       });
       return reply.code(201).send(created);
     } catch (err) {
@@ -122,10 +132,31 @@ export async function contractsRoutes(app: FastifyInstance) {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     const userId = request.user.sub;
-    const existing = await prisma.contract.findFirst({ where: { id, userId } });
+    const existing = await prisma.contract.findFirst({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
-    const refErr = await ensureRefsBelongToUser(userId, parsed.data.organizationId, parsed.data.counterpartyId);
-    if (refErr) return reply.code(400).send({ error: "ValidationError", message: refErr });
+    await requireOrgAccess(prisma, userId, existing.organizationId, "data:write");
+
+    if (parsed.data.organizationId || parsed.data.counterpartyId || parsed.data.templateId) {
+      const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
+      if (parsed.data.organizationId) {
+        await requireOrgAccess(prisma, userId, parsed.data.organizationId, "data:write");
+      }
+      if (parsed.data.counterpartyId) {
+        const cp = await prisma.counterparty.findFirst({
+          where: { id: parsed.data.counterpartyId, userId: { in: accessibleUserIds } },
+          select: { id: true },
+        });
+        if (!cp) return reply.code(400).send({ error: "ValidationError", message: "Контрагент не найден" });
+      }
+      if (parsed.data.templateId) {
+        const tpl = await prisma.contractTemplate.findFirst({
+          where: { id: parsed.data.templateId, userId: { in: accessibleUserIds } },
+          select: { id: true },
+        });
+        if (!tpl) return reply.code(400).send({ error: "ValidationError", message: "Шаблон договора не найден" });
+      }
+    }
+
     try {
       const updated = await prisma.contract.update({
         where: { id },
@@ -142,8 +173,9 @@ export async function contractsRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.contract.findFirst({ where: { id, userId: request.user.sub } });
+    const existing = await prisma.contract.findFirst({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "data:write");
     try {
       await prisma.contract.delete({ where: { id } });
       return { ok: true };
@@ -159,8 +191,9 @@ export async function contractsRoutes(app: FastifyInstance) {
   app.get("/:id/pdf", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const userId = request.user.sub;
+    const orgIds = await getUserOrgIds(prisma, userId);
     const c = await prisma.contract.findFirst({
-      where: { id, userId },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -197,8 +230,9 @@ export async function contractsRoutes(app: FastifyInstance) {
 
   app.get("/:id/preview", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const c = await prisma.contract.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,
@@ -227,8 +261,9 @@ export async function contractsRoutes(app: FastifyInstance) {
 
   app.get("/:id/print-warnings", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const c = await prisma.contract.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: { include: { bankAccounts: true } },
         counterparty: true,

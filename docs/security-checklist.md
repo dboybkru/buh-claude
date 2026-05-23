@@ -123,7 +123,9 @@
 | 11.14 | Email delivery для приглашений | ❌ | TODO — пока MVP claims invite при логине |
 | 11.15 | Row-level audit для каждой write-операции (кто менял что) | ❌ | TODO — только AI-actions покрыты |
 | 11.16 | Counterparty / Nomenclature / ContractTemplate без orgId column — переходный compromise (filter by accessibleUserIds) | ⚠ | будущая миграция должна добавить orgId на справочники |
-| 11.17 | Sprint 9A debt: `acts`, `upds`, `waybills`, `contracts`, `reconciliations`, `contract-templates` ещё используют `userId` filter и не переведены на `requireOrgAccess` + permission gates | ⚠ | Sprint 9B — мигрировать эти routes на полноценный RBAC |
+| 11.17 | `acts`, `upds`, `waybills`, `contracts`, `reconciliations` переведены на `requireOrgAccess` + `data:read`/`data:write` gates; cross-org → 404 | ✅ | Sprint 9B — `routes/acts.ts`, `upds.ts`, `waybills.ts`, `contracts.ts`, `reconciliations.ts` |
+| 11.18 | `contract-templates` переведены на RBAC: read = `data:read` (через `getAccessibleUserIds`), write = `print:settings` (ADMIN+); ACCOUNTANT не может создавать/менять/удалять | ✅ | Sprint 9B — `routes/contract-templates.ts`, `lib/org-access.ts:assertHasPermissionInAnyOrg` |
+| 11.19 | `Counterparty` / `Nomenclature` / `ContractTemplate` всё ещё без `organizationId` column. Кросс-членность org делит данные через `getAccessibleUserIds(callerId)` (legacy ownership) — таблица не разделяется по org. **Sprint 9C debt:** schema-миграция под per-org справочники + решение по merge между членами одной org. | ⚠ | будущая миграция |
 
 ## 12. Docker / deployment (Sprint 8)
 

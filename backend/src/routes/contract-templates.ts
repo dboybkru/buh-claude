@@ -1,4 +1,10 @@
 // CRUD шаблонов договоров + preview-рендер.
+//
+// Sprint 9B: read = data:read (VIEWER+), write = print:settings (ADMIN+).
+// ContractTemplate доешё без orgId column — read scoping идёт через
+// getAccessibleUserIds (compromise), а write через assertHasPermissionInAnyOrg.
+// Когда template.organizationId выставлен — проверяем доступ к этой org
+// напрямую и сохраняем под org.userId, чтобы template был виден всем members.
 
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -12,6 +18,11 @@ import {
   renderContract,
   renderTemplate,
 } from "../lib/contract-template.js";
+import {
+  assertHasPermissionInAnyOrg,
+  getAccessibleUserIds,
+  requireOrgAccess,
+} from "../lib/org-access.js";
 
 const baseShape = {
   name: z.string().min(1).max(255),
@@ -43,14 +54,17 @@ const renderPreviewSchema = z.object({
 export async function contractTemplatesRoutes(app: FastifyInstance) {
   app.addHook("onRequest", app.authenticate);
 
-  // Whitelist переменных для UI
+  // Whitelist переменных для UI — открыт всем авторизованным
   app.get("/variables", async () => ({ variables: TEMPLATE_VARIABLES }));
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
-    const userId = request.user.sub;
+    // Sprint 9B: ContractTemplate is user-scoped (no orgId column). We expose
+    // templates owned by every accessible owner so all members of an org see
+    // the same template set. See lib/org-access.ts:getAccessibleUserIds.
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
     const where: Prisma.ContractTemplateWhereInput = {
-      userId,
+      userId: { in: userIds },
       ...(q.q
         ? {
             OR: [
@@ -76,8 +90,9 @@ export async function contractTemplatesRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
     const tpl = await prisma.contractTemplate.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, userId: { in: userIds } },
       include: { organization: { select: { id: true, name: true } } },
     });
     if (!tpl) throw Errors.notFound("Шаблон договора");
@@ -89,19 +104,26 @@ export async function contractTemplatesRoutes(app: FastifyInstance) {
     if (!parsed.success) throw Errors.validation("Невалидные данные шаблона", parsed.error.flatten());
     const userId = request.user.sub;
 
+    // Templates are organizational settings. ADMIN+ in at least one org, or
+    // (when scoped to a specific org) print:settings in that org.
+    let ownerUserId = userId;
     if (parsed.data.organizationId) {
-      const owns = await prisma.organization.findFirst({
-        where: { id: parsed.data.organizationId, userId },
-        select: { id: true },
+      await requireOrgAccess(prisma, userId, parsed.data.organizationId, "print:settings");
+      const org = await prisma.organization.findUnique({
+        where: { id: parsed.data.organizationId },
+        select: { userId: true },
       });
-      if (!owns) throw Errors.validation("Организация не найдена");
+      if (!org) throw Errors.validation("Организация не найдена");
+      ownerUserId = org.userId;
+    } else {
+      await assertHasPermissionInAnyOrg(userId, "print:settings");
     }
 
     const variables = extractVariables(parsed.data.content);
 
     const created = await prisma.contractTemplate.create({
       data: {
-        userId,
+        userId: ownerUserId,
         name: parsed.data.name,
         description: parsed.data.description ?? null,
         content: parsed.data.content,
@@ -118,15 +140,24 @@ export async function contractTemplatesRoutes(app: FastifyInstance) {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные данные шаблона", parsed.error.flatten());
     const userId = request.user.sub;
-    const existing = await prisma.contractTemplate.findFirst({ where: { id, userId } });
+    const userIds = await getAccessibleUserIds(prisma, userId);
+    const existing = await prisma.contractTemplate.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) throw Errors.notFound("Шаблон договора");
 
-    if (parsed.data.organizationId) {
-      const owns = await prisma.organization.findFirst({
-        where: { id: parsed.data.organizationId, userId },
+    // Gate the write against the template's current scope (if any) or any-org.
+    if (existing.organizationId) {
+      await requireOrgAccess(prisma, userId, existing.organizationId, "print:settings");
+    } else {
+      await assertHasPermissionInAnyOrg(userId, "print:settings");
+    }
+    // If re-pointing to another org, the caller must also have print:settings there.
+    if (parsed.data.organizationId && parsed.data.organizationId !== existing.organizationId) {
+      await requireOrgAccess(prisma, userId, parsed.data.organizationId, "print:settings");
+      const org = await prisma.organization.findUnique({
+        where: { id: parsed.data.organizationId },
         select: { id: true },
       });
-      if (!owns) throw Errors.validation("Организация не найдена");
+      if (!org) throw Errors.validation("Организация не найдена");
     }
 
     const data: Prisma.ContractTemplateUpdateInput = {};
@@ -148,21 +179,30 @@ export async function contractTemplatesRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.contractTemplate.findFirst({ where: { id, userId: request.user.sub } });
+    const userId = request.user.sub;
+    const userIds = await getAccessibleUserIds(prisma, userId);
+    const existing = await prisma.contractTemplate.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) throw Errors.notFound("Шаблон договора");
+    if (existing.organizationId) {
+      await requireOrgAccess(prisma, userId, existing.organizationId, "print:settings");
+    } else {
+      await assertHasPermissionInAnyOrg(userId, "print:settings");
+    }
     await prisma.contractTemplate.delete({ where: { id } });
     return { ok: true };
   });
 
-  // POST /render-preview — отрендерить шаблон с подстановкой реквизитов
+  // POST /render-preview — отрендерить шаблон с подстановкой реквизитов.
+  // Чисто read-only: VIEWER+ ок.
   app.post("/render-preview", async (request) => {
     const body = renderPreviewSchema.parse(request.body);
     const userId = request.user.sub;
+    const userIds = await getAccessibleUserIds(prisma, userId);
 
     let content = body.content ?? "";
     if (!content && body.templateId) {
       const tpl = await prisma.contractTemplate.findFirst({
-        where: { id: body.templateId, userId },
+        where: { id: body.templateId, userId: { in: userIds } },
       });
       if (!tpl) throw Errors.notFound("Шаблон договора");
       content = tpl.content;
@@ -174,9 +214,13 @@ export async function contractTemplatesRoutes(app: FastifyInstance) {
       return renderTemplate(content, {});
     }
 
+    // Caller must at least be able to read the org's data for the preview.
+    await requireOrgAccess(prisma, userId, body.organizationId, "data:read");
     const [org, cp] = await Promise.all([
-      prisma.organization.findFirst({ where: { id: body.organizationId, userId } }),
-      prisma.counterparty.findFirst({ where: { id: body.counterpartyId, userId } }),
+      prisma.organization.findUnique({ where: { id: body.organizationId } }),
+      prisma.counterparty.findFirst({
+        where: { id: body.counterpartyId, userId: { in: userIds } },
+      }),
     ]);
     if (!org) throw Errors.validation("Организация не найдена");
     if (!cp) throw Errors.validation("Контрагент не найден");
