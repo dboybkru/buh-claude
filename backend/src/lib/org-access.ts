@@ -50,6 +50,18 @@ export async function isPlatformAdmin(userId: string): Promise<boolean> {
 }
 
 /**
+ * Sprint 10: hard guard for /admin/system/* endpoints. Throws 403 if the
+ * caller is not a platform admin. Unlike isPlatformAdmin() (which is a
+ * predicate), this is a side-effecting assert that the route handler can
+ * just `await` at the top.
+ */
+export async function requirePlatformAdmin(userId: string): Promise<void> {
+  if (!(await isPlatformAdmin(userId))) {
+    throw Errors.forbidden("Доступ только для системного администратора");
+  }
+}
+
+/**
  * Synthetic membership returned to a platform admin who has no real
  * OrganizationMember row. The id is not a real PK — callers MUST NOT try
  * to look it up or update by it.

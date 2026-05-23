@@ -44,6 +44,7 @@ export async function resetDb(): Promise<void> {
       "ReconciliationAct", "Contract", "ContractTemplate", "BankAccount",
       "Nomenclature", "Counterparty", "DocumentNumbering",
       "AiAuditLog", "AiActionPlan", "AiSettings",
+      "SystemAuditLog", "IntegrationSetting",
       "OrganizationMember",
       "Organization", "UserSession", "User"
     RESTART IDENTITY CASCADE;

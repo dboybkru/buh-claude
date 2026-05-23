@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { findPartyByInn, isDadataConfigured, suggestAddress, suggestParty } from "../lib/dadata.js";
+import { findPartyByInn, getActiveDadata, suggestAddress, suggestParty } from "../lib/dadata.js";
 
 const querySchema = z.object({ query: z.string().min(1).max(200), count: z.coerce.number().int().min(1).max(20).optional() });
 const innSchema = z.object({ inn: z.string().regex(/^\d{10}(\d{2})?$/, "ИНН должен содержать 10 или 12 цифр") });
@@ -11,12 +11,12 @@ export async function dadataRoutes(app: FastifyInstance) {
   function notConfigured(reply: import("fastify").FastifyReply) {
     return reply.code(503).send({
       error: "ServiceUnavailable",
-      message: "DaData API не сконфигурирована. Задайте DADATA_API_KEY в .env.",
+      message: "DaData API не сконфигурирована. Откройте /admin/system или задайте DADATA_API_KEY в .env.",
     });
   }
 
   app.get("/party/by-inn", async (request, reply) => {
-    if (!isDadataConfigured()) return notConfigured(reply);
+    if (!(await getActiveDadata())) return notConfigured(reply);
     const parsed = innSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     try {
@@ -29,7 +29,7 @@ export async function dadataRoutes(app: FastifyInstance) {
   });
 
   app.get("/party/suggest", async (request, reply) => {
-    if (!isDadataConfigured()) return notConfigured(reply);
+    if (!(await getActiveDadata())) return notConfigured(reply);
     const parsed = querySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     try {
@@ -42,7 +42,7 @@ export async function dadataRoutes(app: FastifyInstance) {
   });
 
   app.get("/address/suggest", async (request, reply) => {
-    if (!isDadataConfigured()) return notConfigured(reply);
+    if (!(await getActiveDadata())) return notConfigured(reply);
     const parsed = querySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     try {

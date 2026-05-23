@@ -39,9 +39,20 @@ cp backend/.env.example backend/.env
 | `NODE_ENV` | `development` | `production` для боевого |
 | `CORS_ORIGIN` | `http://localhost:5173` | для prod — реальный URL фронта |
 | `UPLOADS_DIR` | `./uploads` | в docker-compose маппится на volume |
+| `APP_ENCRYPTION_KEY` | `<openssl rand -base64 32>` | **Sprint 10:** отдельный ключ для шифрования секретов IntegrationSetting (DaData/AI/SMTP в админке). Опционален, fallback на `JWT_SECRET` — но в продакшене лучше задать явно. |
+
+Сгенерировать `APP_ENCRYPTION_KEY`:
+
+```bash
+openssl rand -base64 32
+```
+
+(PowerShell-вариант: `[Convert]::ToBase64String((1..32 | %{ Get-Random -Min 0 -Max 256 } -as [byte[]]))`)
 
 > ⚠ **Никогда не коммитьте `backend/.env`.** Файл уже в `.gitignore`.
 > `docker compose config` целиком распечатывает `env_file` в STDOUT — не публикуйте его вывод.
+
+> ⚠ Ротация `APP_ENCRYPTION_KEY` инвалидирует все сохранённые секреты в `IntegrationSetting`. После ротации откройте `/admin/system` и заново введите DaData token / SMTP password / AI apiKey.
 
 ## 3. First run (dev)
 
@@ -247,6 +258,26 @@ WHERE m.id IS NULL;
 INSERT INTO "OrganizationMember" (id, "organizationId", "userId", role, status, "createdAt", "updatedAt")
 VALUES (gen_random_uuid(), '<orgId>', '<userId>', 'OWNER', 'ACTIVE', NOW(), NOW());
 ```
+
+### 10.3b. Promote platform admin (Sprint 9C/10)
+
+Назначить пользователя платформенным админом (даёт implicit OWNER во всех
+организациях + доступ к `/admin/system`):
+
+```sql
+UPDATE "User" SET role='ADMIN' WHERE email='<your-email>';
+```
+
+После повышения откройте `https://<your-domain>/admin/system` и настройте:
+
+| Таб | Что | Когда нужно |
+|---|---|---|
+| **DaData** | token + secret + baseUrl | для autosuggest контрагентов / адресов |
+| **AI Provider** | apiKey + baseUrl + defaultModel | system default; org-level `AiSettings` сохраняет приоритет |
+| **SMTP** | host + port + username + password + fromEmail | будущая email-доставка приглашений (пока только настройки + test) |
+| **App** | publicUrl + supportEmail + appName | метаданные платформы |
+
+Тест-кнопки на каждом табе делают safe lightweight-запрос к настоящему сервису.
 
 ### 10.4. Опциональный seed демо-данных
 

@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Building2, Users, Package, FileSignature,
-  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet, BookCheck, Bot, Upload, FileSpreadsheet, Moon, Sun,
+  Receipt, FileCheck, FileText, Truck, LogOut, User as UserIcon, Wallet, BookCheck, Bot, Upload, FileSpreadsheet, Moon, Sun, Settings,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme";
@@ -78,7 +78,18 @@ export function AppShell() {
           </Link>
         </div>
         <nav className="flex-1 overflow-y-auto py-3">
-          {NAV.map((group) => (
+          {[
+            ...NAV,
+            // Sprint 10: системная админка видна только platform admin'у.
+            ...(user?.role === "ADMIN"
+              ? [
+                  {
+                    title: "Система",
+                    items: [{ to: "/admin/system", label: "Системные настройки", icon: Settings }],
+                  } as NavGroup,
+                ]
+              : []),
+          ].map((group) => (
             <div key={group.title} className="mb-4 px-3">
               <div className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {group.title}

@@ -21,6 +21,10 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, "JWT_SECRET должен быть не короче 32 символов (используется и для шифрования AI apiKey)"),
   JWT_EXPIRES_IN: z.string().default("7d"),
 
+  // Sprint 10: отдельный ключ для шифрования секретов IntegrationSetting.
+  // Опционален: если пуст, lib/secrets.ts падёт на JWT_SECRET-derived key.
+  APP_ENCRYPTION_KEY: z.string().default(""),
+
   // Файлы — uploads для логотипа/печати/подписи организации
   UPLOADS_DIR: z.string().default("./uploads"),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),

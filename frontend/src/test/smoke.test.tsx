@@ -147,6 +147,17 @@ describe("Smoke: страницы рендерятся", () => {
     expect(document.body).toBeTruthy();
   });
 
+  it("SystemAdminPage (Sprint 10) — обычный USER видит экран отказа, без вкладок DaData/AI/SMTP", async () => {
+    const { SystemAdminPage } = await import("@/pages/SystemAdmin");
+    renderPage(<SystemAdminPage />);
+    // user mock в начале файла имеет role: "USER" → должен отображаться access-denied экран.
+    expect(screen.getByText(/Доступ запрещён/)).toBeTruthy();
+    // tabs не рендерятся для не-admin'a.
+    expect(document.body.textContent).not.toMatch(/DaData/);
+    expect(document.body.textContent).not.toMatch(/AI Provider/);
+    expect(document.body.textContent).not.toMatch(/SMTP/);
+  });
+
   it("PrintWarnings component", async () => {
     const { PrintWarnings } = await import("@/components/PrintWarnings");
     renderPage(<PrintWarnings url="/invoices/x/print-warnings" />);

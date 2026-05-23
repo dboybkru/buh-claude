@@ -24,6 +24,7 @@ import { filesRoutes } from "./routes/files.js";
 import { contractTemplatesRoutes } from "./routes/contract-templates.js";
 import { healthRoutes } from "./routes/health.js";
 import { membersRoutes } from "./routes/members.js";
+import { adminSystemRoutes } from "./routes/admin-system.js";
 import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
 import { ZodError } from "zod";
 import crypto from "node:crypto";
@@ -157,6 +158,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(bankImportRoutes, { prefix: "/api/v1/bank-import" });
   await app.register(filesRoutes, { prefix: "/api/v1/files" });
   await app.register(contractTemplatesRoutes, { prefix: "/api/v1/contract-templates" });
+  // Sprint 10: platform-admin-only system integrations (DaData/AI/SMTP/APP).
+  await app.register(adminSystemRoutes, { prefix: "/api/v1/admin/system" });
 
   return app;
 }

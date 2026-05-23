@@ -32,6 +32,7 @@ const ImportPage = lazy(() => import("@/pages/Import").then((m) => ({ default: m
 const BankImportPage = lazy(() => import("@/pages/BankImport").then((m) => ({ default: m.BankImportPage })));
 const Placeholder = lazy(() => import("@/pages/Placeholder").then((m) => ({ default: m.Placeholder })));
 const MembersPage = lazy(() => import("@/pages/Members").then((m) => ({ default: m.MembersPage })));
+const SystemAdminPage = lazy(() => import("@/pages/SystemAdmin").then((m) => ({ default: m.SystemAdminPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -76,6 +77,7 @@ export function App() {
 
                       <Route path="/ai" element={<AiChatPage />} />
                       <Route path="/ai/settings" element={<AiSettingsPage />} />
+                      <Route path="/admin/system" element={<SystemAdminPage />} />
 
                       <Route path="/import" element={<ImportPage />} />
 

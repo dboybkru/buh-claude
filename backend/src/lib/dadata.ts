@@ -1,10 +1,53 @@
 // Клиент DaData (https://dadata.ru/api/). Использует undici (есть в deps).
 // Если ключ не задан — операции возвращают `null` (роут вернёт 503).
+//
+// Sprint 10: token+secret сначала читаются из IntegrationSetting(category=DADATA),
+// fallback на env.DADATA_API_KEY / env.DADATA_SECRET_KEY для backward-compat.
 
 import { request } from "undici";
 import { env } from "./env.js";
+import { loadSetting } from "./system-settings.js";
 
-const SUGGEST_BASE = "https://suggestions.dadata.ru/suggestions/api/4_1/rs";
+const SUGGEST_BASE_DEFAULT = "https://suggestions.dadata.ru/suggestions/api/4_1/rs";
+
+interface ActiveDadata {
+  token: string;
+  secret: string;
+  baseUrl: string;
+}
+
+/**
+ * Resolves the live DaData credentials. Order:
+ *   1. IntegrationSetting(category=DADATA, enabled=true) with token present
+ *   2. env.DADATA_API_KEY (legacy fallback)
+ * Returns null when neither source is usable.
+ */
+export async function getActiveDadata(): Promise<ActiveDadata | null> {
+  try {
+    const s = await loadSetting("DADATA");
+    const token = (s.secrets["token"] ?? "").trim();
+    if (s.enabled && token.length > 0) {
+      return {
+        token,
+        secret: (s.secrets["secret"] ?? "").trim(),
+        baseUrl: ((s.config as Record<string, unknown>).suggestionsUrl as string | undefined)
+          ?? ((s.config as Record<string, unknown>).baseUrl as string | undefined)
+          ?? SUGGEST_BASE_DEFAULT,
+      };
+    }
+  } catch {
+    // IntegrationSetting не доступна (миграция не применена / БД недоступна)
+    // — выпадем в env fallback ниже.
+  }
+  if (env.DADATA_API_KEY.length > 0) {
+    return {
+      token: env.DADATA_API_KEY,
+      secret: env.DADATA_SECRET_KEY,
+      baseUrl: SUGGEST_BASE_DEFAULT,
+    };
+  }
+  return null;
+}
 
 export interface DadataPartySuggestion {
   value: string;
@@ -31,17 +74,27 @@ export interface DadataAddressSuggestion {
   data: Record<string, unknown>;
 }
 
+/**
+ * Sync legacy check used by routes/dadata.ts and a few env-time helpers.
+ * Returns true if env legacy key is set. For the DB-aware version use
+ * `await getActiveDadata()` which also covers IntegrationSetting.
+ */
 export function isDadataConfigured(): boolean {
   return env.DADATA_API_KEY.length > 0;
 }
 
 async function call<T>(path: string, body: object): Promise<T> {
-  const { statusCode, body: respBody } = await request(`${SUGGEST_BASE}${path}`, {
+  const active = await getActiveDadata();
+  if (!active) {
+    throw new Error("DaData не настроена (ни IntegrationSetting, ни env)");
+  }
+  const url = `${active.baseUrl.replace(/\/$/, "")}${path}`;
+  const { statusCode, body: respBody } = await request(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      Authorization: `Token ${env.DADATA_API_KEY}`,
+      Authorization: `Token ${active.token}`,
     },
     body: JSON.stringify(body),
   });

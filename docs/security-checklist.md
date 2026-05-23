@@ -128,6 +128,21 @@
 | 11.19 | `Counterparty` / `Nomenclature` / `ContractTemplate` всё ещё без `organizationId` column. Кросс-членность org делит данные через `getAccessibleUserIds(callerId)` (legacy ownership) — таблица не разделяется по org. **Sprint 9C debt:** schema-миграция под per-org справочники + решение по merge между членами одной org. | ⚠ | будущая миграция |
 | 11.20 | **Platform admin (Sprint 9C):** `User.role=ADMIN` даёт bypass всех org-чеков. `isPlatformAdmin` читается в `getMembership` (синтетический OWNER для любой существующей org), `getUserOrgIds` (все orgs), `getAccessibleUserIds` (все users), `assertCanWriteData`, `assertHasPermissionInAnyOrg`. Бизнес-инварианты (last-owner guard, P2002 уникальность) НЕ обходятся. Назначается напрямую в БД (`UPDATE "User" SET role='ADMIN'`) — UI пока нет. **Минимизировать число admin'ов:** каждый видит все organizations / counterparties / документы / AI ключи. | ✅ | `lib/org-access.ts:isPlatformAdmin`, integration `superadmin.test.ts` |
 
+## 11A. System Admin / IntegrationSetting (Sprint 10)
+
+| # | Проверка | Статус | Где |
+|---|---|---|---|
+| 11A.1 | `/api/v1/admin/system/*` доступен ТОЛЬКО при `User.role=ADMIN` (`requirePlatformAdmin` → 403); inactive admin тоже отказывается | ✅ | `lib/org-access.ts:requirePlatformAdmin`, integration `admin-system.test.ts` |
+| 11A.2 | Секреты `IntegrationSetting.secretsCiphertext` шифруются AES-256-GCM с per-secret random IV + auth tag | ✅ | `lib/secrets.ts` |
+| 11A.3 | Ключ шифрования — `APP_ENCRYPTION_KEY` (preferred), fallback на `JWT_SECRET`. Помечено в env example. | ✅ | `backend/.env.production.example`, `lib/secrets.ts:requireEncryptionKey` |
+| 11A.4 | GET `/admin/system/settings*` НИКОГДА не возвращает plaintext-секреты — только `secretPresent: bool` + `secretMasked: "ab••••cdef"` | ✅ | `lib/system-settings.ts:serialiseSetting`, тест `ms1@x.io` |
+| 11A.5 | PUT без поля секрета сохраняет старое значение (нет accidental wipe); PUT с пустой строкой — clear; PUT с новым значением — rotate | ✅ | `lib/system-settings.ts:saveSetting`, тесты `ms2/ms3/ms4` |
+| 11A.6 | `SystemAuditLog` фиксирует actor / action / category / changedConfigFields / rotatedSecretKeys. Метаданные проходят через `scrubSecretLikeKeys` regex `/(token\|secret\|password\|apikey)/i` → `[REDACTED]` | ✅ | `lib/system-settings.ts:writeAudit`, тест `au1@x.io` (no leakage) |
+| 11A.7 | Test endpoints `/test/{dadata,ai,smtp}` всегда возвращают структурный `{ok, message}` (не throw на сетевые ошибки); таймаут 10 с | ✅ | `lib/system-integrations.ts` |
+| 11A.8 | DaData clients (`routes/dadata.ts`, lib) сначала читают `IntegrationSetting(DADATA)`, fallback на env — legacy `DADATA_API_KEY` ещё работает | ✅ | `lib/dadata.ts:getActiveDadata` |
+| 11A.9 | AI system default добавлен как отдельная категория. Org-level `AiSettings` остался как есть и имеет приоритет — миграция AI-провайдеров в IntegrationSetting в этом спринте НЕ сделана | ⚠ | IntegrationSetting(AI) сохраняется, но `loadAiConfig` в `routes/ai.ts` пока его не читает. Следующий шаг: переключить fallback. |
+| 11A.10 | SMTP test отправляет реальное письмо через nodemailer. Email-доставка для invite/notification — пока НЕ реализована, только настройки + test | ⚠ | `lib/system-integrations.ts:testSmtp`. Email-invites — будущий спринт. |
+
 ## 12. Docker / deployment (Sprint 8)
 
 | # | Проверка | Статус | Где |

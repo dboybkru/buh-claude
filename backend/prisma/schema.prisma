@@ -42,6 +42,9 @@ model User {
   aiAuditLogs    AiAuditLog[]
   memberships    OrganizationMember[] @relation("memberUser")
   invitesSent    OrganizationMember[] @relation("inviter")
+  // Sprint 10 — System Admin
+  systemSettingsUpdated IntegrationSetting[] @relation("integrationSettingUpdatedBy")
+  systemAuditEntries    SystemAuditLog[]     @relation("systemAuditActor")
 
   @@index([email])
 }
@@ -848,4 +851,62 @@ enum WaybillOp {
   PURCHASE   // Приём от поставщика
   RETURN     // Возврат
   TRANSFER   // Внутреннее перемещение
+}
+
+// =============================================================================
+// SYSTEM SETTINGS & AUDIT (Sprint 10 — System Admin)
+// =============================================================================
+//
+// Системные настройки интеграций (DaData / AI / SMTP / APP), управляются
+// только platform admin (User.role=ADMIN). Секреты хранятся отдельно от
+// обычного config'а — в зашифрованном виде через lib/secrets.ts (AES-256-GCM
+// поверх APP_ENCRYPTION_KEY, fallback на JWT_SECRET для совместимости).
+//
+// Одна строка на категорию (unique on category). Любой PUT — upsert.
+
+model IntegrationSetting {
+  id                    String                    @id @default(uuid())
+  category              IntegrationCategory       @unique
+  enabled               Boolean                   @default(false)
+  // Открытые поля (host, port, baseUrl, model, fromEmail и т.п.). Нет секретов.
+  configJson            Json                      @default("{}")
+  // Зашифрованный JSON со словарём секретов (apiKey, password, token...).
+  // Пустая строка = ничего не сохранено.
+  secretsCiphertext     String                    @default("")
+  updatedById           String?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+
+  updatedBy User? @relation("integrationSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([category])
+}
+
+enum IntegrationCategory {
+  DADATA
+  AI
+  SMTP
+  APP
+}
+
+model SystemAuditLog {
+  id            String                @id @default(uuid())
+  actorUserId   String?
+  action        SystemAuditAction
+  category      IntegrationCategory?
+  // Без секретов: список изменённых полей, новые открытые значения, IP/UA.
+  metadataJson  Json                  @default("{}")
+  createdAt     DateTime              @default(now())
+
+  actor User? @relation("systemAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([category])
+  @@index([createdAt])
+}
+
+enum SystemAuditAction {
+  SYSTEM_SETTING_UPDATED
+  SYSTEM_SETTING_TESTED
+  SECRET_ROTATED
 }
