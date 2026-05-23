@@ -126,6 +126,7 @@
 | 11.17 | `acts`, `upds`, `waybills`, `contracts`, `reconciliations` переведены на `requireOrgAccess` + `data:read`/`data:write` gates; cross-org → 404 | ✅ | Sprint 9B — `routes/acts.ts`, `upds.ts`, `waybills.ts`, `contracts.ts`, `reconciliations.ts` |
 | 11.18 | `contract-templates` переведены на RBAC: read = `data:read` (через `getAccessibleUserIds`), write = `print:settings` (ADMIN+); ACCOUNTANT не может создавать/менять/удалять | ✅ | Sprint 9B — `routes/contract-templates.ts`, `lib/org-access.ts:assertHasPermissionInAnyOrg` |
 | 11.19 | `Counterparty` / `Nomenclature` / `ContractTemplate` всё ещё без `organizationId` column. Кросс-членность org делит данные через `getAccessibleUserIds(callerId)` (legacy ownership) — таблица не разделяется по org. **Sprint 9C debt:** schema-миграция под per-org справочники + решение по merge между членами одной org. | ⚠ | будущая миграция |
+| 11.20 | **Platform admin (Sprint 9C):** `User.role=ADMIN` даёт bypass всех org-чеков. `isPlatformAdmin` читается в `getMembership` (синтетический OWNER для любой существующей org), `getUserOrgIds` (все orgs), `getAccessibleUserIds` (все users), `assertCanWriteData`, `assertHasPermissionInAnyOrg`. Бизнес-инварианты (last-owner guard, P2002 уникальность) НЕ обходятся. Назначается напрямую в БД (`UPDATE "User" SET role='ADMIN'`) — UI пока нет. **Минимизировать число admin'ов:** каждый видит все organizations / counterparties / документы / AI ключи. | ✅ | `lib/org-access.ts:isPlatformAdmin`, integration `superadmin.test.ts` |
 
 ## 12. Docker / deployment (Sprint 8)
 

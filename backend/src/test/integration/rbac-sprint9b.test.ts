@@ -6,6 +6,7 @@
 // that ACCOUNTANT cannot manage templates (print:settings is ADMIN+).
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import type { LightMyRequestResponse } from "fastify";
 import {
   addMember,
   closeAll,
@@ -63,7 +64,7 @@ function docPayload(orgId: string, cpId: string) {
   };
 }
 
-async function createDoc(token: string, url: string, payload: unknown) {
+async function createDoc(token: string, url: string, payload: Record<string, unknown>): Promise<LightMyRequestResponse> {
   const app = await getTestApp();
   return app.inject({
     method: "POST",
