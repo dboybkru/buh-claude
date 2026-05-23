@@ -40,6 +40,8 @@ model User {
   aiSettings     AiSettings?
   aiActionPlans  AiActionPlan[]
   aiAuditLogs    AiAuditLog[]
+  memberships    OrganizationMember[] @relation("memberUser")
+  invitesSent    OrganizationMember[] @relation("inviter")
 
   @@index([email])
 }
@@ -124,9 +126,54 @@ model Organization {
   payments          Payment[]
   reconciliations   ReconciliationAct[]
   contractTemplates ContractTemplate[]
+  members           OrganizationMember[]
 
   @@unique([userId, inn])
   @@index([userId])
+}
+
+// =============================================================================
+// ORGANIZATION MEMBERSHIP — RBAC (Sprint 9)
+// Связывает пользователя с организацией и хранит его роль/статус. У каждой
+// организации должен быть как минимум один ACTIVE OWNER. Удалить последнего
+// OWNER нельзя (см. routes/members.ts).
+// userId — null означает INVITED по email, без существующего пользователя
+// (для MVP без email-доставки приглашение принимается автоматически после
+// регистрации пользователя с этим email).
+// =============================================================================
+
+model OrganizationMember {
+  id             String                       @id @default(uuid())
+  organizationId String
+  userId         String?
+  role           OrganizationRole             @default(VIEWER)
+  status         OrganizationMemberStatus     @default(ACTIVE)
+  invitedById    String?                                          // кто пригласил (для аудита)
+  invitedEmail   String?                                          // email приглашения (если userId ещё null)
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation("memberUser", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy    User?        @relation("inviter",    fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@index([invitedEmail])
+}
+
+enum OrganizationRole {
+  OWNER         // полный доступ, не может быть удалён последний
+  ADMIN         // почти всё, кроме демоушна owner-а / удаления org
+  ACCOUNTANT    // CRUD документов, контрагентов, платежей, bank-import, AI confirm
+  VIEWER        // read-only
+}
+
+enum OrganizationMemberStatus {
+  ACTIVE        // активен
+  INVITED       // приглашён, ещё не принял (userId может быть null)
+  DISABLED      // отозван доступ (мягкое удаление)
 }
 
 model BankAccount {

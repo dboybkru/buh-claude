@@ -31,6 +31,7 @@ const AiChatPage = lazy(() => import("@/pages/AiChat").then((m) => ({ default: m
 const ImportPage = lazy(() => import("@/pages/Import").then((m) => ({ default: m.ImportPage })));
 const BankImportPage = lazy(() => import("@/pages/BankImport").then((m) => ({ default: m.BankImportPage })));
 const Placeholder = lazy(() => import("@/pages/Placeholder").then((m) => ({ default: m.Placeholder })));
+const MembersPage = lazy(() => import("@/pages/Members").then((m) => ({ default: m.MembersPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -62,6 +63,7 @@ export function App() {
                       <Route path="/" element={<DashboardPage />} />
 
                       <Route path="/organizations" element={<OrganizationsPage />} />
+                      <Route path="/organizations/:orgId/members" element={<MembersPage />} />
                       <Route path="/counterparties" element={<CounterpartiesPage />} />
                       <Route path="/counterparties/:id" element={<CounterpartyDetailPage />} />
                       <Route path="/nomenclature" element={<NomenclaturePage />} />

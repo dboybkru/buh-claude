@@ -299,14 +299,15 @@ describe("Bank statement import", () => {
     expect(body.errors[0].message).toMatch(/OUT/);
   });
 
-  it("security: чужая организация — 400 на preview", async () => {
+  it("security: чужая организация — 404 на preview (Sprint 9 privacy)", async () => {
     const { token: t1 } = await registerUser("user1@test.local");
     const { token: t2 } = await registerUser("user2@test.local");
     const org2 = await createOrganization(t2);
 
     const csv = readFileSync(resolve(FIX_DIR, "basic.csv"));
     const r = await preview(t1, org2.id, "basic.csv", csv);
-    expect(r.statusCode).toBe(400);
+    // requireOrgAccess returns 404 (privacy) before file validation.
+    expect(r.statusCode).toBe(404);
   });
 
   it("security: импорт на чужой invoiceId — ошибка", async () => {

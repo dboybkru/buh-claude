@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { paginationSchema, parseSort, paginate } from "../lib/validators.js";
+import { assertCanWriteData, getAccessibleUserIds } from "../lib/org-access.js";
 
 const nomenTypeEnum = z.enum(["TOVAR", "USLUGA", "RABOTA"]);
 
@@ -23,7 +24,6 @@ const createSchema = z.object(baseShape);
 const updateSchema = z.object(baseShape).partial();
 
 function toData<T extends Record<string, unknown>>(d: T) {
-  // Decimal-поля принимаем как number, Prisma сам сконвертит
   return d;
 }
 
@@ -32,9 +32,9 @@ export async function nomenclatureRoutes(app: FastifyInstance) {
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
-    const userId = request.user.sub;
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
     const where: Prisma.NomenclatureWhereInput = {
-      userId,
+      userId: { in: userIds },
       ...(q.q
         ? {
             OR: [
@@ -59,7 +59,8 @@ export async function nomenclatureRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const n = await prisma.nomenclature.findFirst({ where: { id, userId: request.user.sub } });
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const n = await prisma.nomenclature.findFirst({ where: { id, userId: { in: userIds } } });
     if (!n) return reply.code(404).send({ error: "NotFound" });
     return n;
   });
@@ -67,6 +68,7 @@ export async function nomenclatureRoutes(app: FastifyInstance) {
   app.post("/", async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
+    await assertCanWriteData(request.user.sub);
     try {
       const created = await prisma.nomenclature.create({
         data: { ...toData(parsed.data), userId: request.user.sub } as Prisma.NomenclatureUncheckedCreateInput,
@@ -84,7 +86,9 @@ export async function nomenclatureRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
-    const existing = await prisma.nomenclature.findFirst({ where: { id, userId: request.user.sub } });
+    await assertCanWriteData(request.user.sub);
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const existing = await prisma.nomenclature.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
     try {
       const updated = await prisma.nomenclature.update({
@@ -102,7 +106,9 @@ export async function nomenclatureRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.nomenclature.findFirst({ where: { id, userId: request.user.sub } });
+    await assertCanWriteData(request.user.sub);
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const existing = await prisma.nomenclature.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
     try {
       await prisma.nomenclature.delete({ where: { id } });

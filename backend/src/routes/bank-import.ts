@@ -25,6 +25,7 @@ import {
 } from "../lib/bank-import/index.js";
 import type { PreviewRow, PreviewSummary } from "../lib/bank-import/types.js";
 import { createPaymentInTx } from "../lib/payments-service.js";
+import { requireOrgAccess } from "../lib/org-access.js";
 
 const allocationSchema = z.object({
   invoiceId: z.string().uuid(),
@@ -78,8 +79,9 @@ export async function bankImportRoutes(app: FastifyInstance) {
     if (!organizationId) throw Errors.validation("organizationId обязателен");
     if (!fileBuf || !fileName) throw Errors.validation("Файл не загружен");
 
-    // Проверяем владение организацией и банковским счётом
-    const org = await prisma.organization.findFirst({ where: { id: organizationId, userId }, select: { id: true } });
+    // Sprint 9: bank import requires ACCOUNTANT+ in the target org.
+    await requireOrgAccess(prisma, userId, organizationId, "bank:import");
+    const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { id: true } });
     if (!org) throw Errors.validation("Организация не найдена");
     if (bankAccountId) {
       const ba = await prisma.bankAccount.findFirst({
@@ -188,6 +190,13 @@ export async function bankImportRoutes(app: FastifyInstance) {
       throw Errors.validation("Сессия предпросмотра не найдена или истекла. Загрузите файл заново.");
     }
     const { organizationId, bankAccountId: previewBankAccount } = preview.meta;
+    // Sprint 9: confirm requires the same write-perm as preview.
+    await requireOrgAccess(prisma, userId, organizationId, "bank:import");
+    const orgRow = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { userId: true },
+    });
+    const ownerUserId = orgRow?.userId ?? userId;
 
     const createdPayments: string[] = [];
     const skippedRows: number[] = [];
@@ -206,7 +215,7 @@ export async function bankImportRoutes(app: FastifyInstance) {
         // Идемпотентность: проверим дубль ДО транзакции.
         const dupWhere: Parameters<typeof prisma.payment.findFirst>[0] = {
           where: {
-            userId,
+            userId: ownerUserId,
             organizationId,
             date: new Date(r.date),
             amount: r.amount,
@@ -240,7 +249,7 @@ export async function bankImportRoutes(app: FastifyInstance) {
         }
 
         const created = await prisma.$transaction((tx) =>
-          createPaymentInTx(tx, userId, {
+          createPaymentInTx(tx, ownerUserId, {
             organizationId,
             counterpartyId: r.counterpartyId ?? null,
             bankAccountId,

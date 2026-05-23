@@ -140,6 +140,13 @@ describe("Smoke: страницы рендерятся", () => {
     expect(screen.getByText("Мои организации")).toBeTruthy();
   });
 
+  it("MembersPage (Sprint 9) — рендерится без orgId-параметра", async () => {
+    const { MembersPage } = await import("@/pages/Members");
+    renderPage(<MembersPage />);
+    // Без orgId компонент рано выходит — главное, не падает.
+    expect(document.body).toBeTruthy();
+  });
+
   it("PrintWarnings component", async () => {
     const { PrintWarnings } = await import("@/components/PrintWarnings");
     renderPage(<PrintWarnings url="/invoices/x/print-warnings" />);

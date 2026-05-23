@@ -259,9 +259,9 @@ describe("AI flow integration (Mock provider)", () => {
       method: "POST", url: `/api/v1/ai/action-plans/${plan.id}/confirm`,
       headers: { Authorization: `Bearer ${u2.token}` }, payload: {},
     });
-    expect(r.statusCode).toBe(200);
-    const body = r.json();
-    expect(body.errors.length).toBe(1);
-    expect(body.applied).toEqual([]);
+    // Sprint 9: cross-org confirm is rejected at the membership gate
+    // (404 — privacy obfuscation), not in the executor. Previously the
+    // request reached the executor and returned 200 with errors[1].
+    expect(r.statusCode).toBe(404);
   });
 });

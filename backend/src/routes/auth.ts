@@ -20,6 +20,35 @@ function sessionExpiry(): Date {
   return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 }
 
+/**
+ * Sprint 9: when a user logs in / registers, claim any INVITED memberships
+ * that were created for their email before the user existed. We attach userId
+ * to the row and flip status to ACTIVE. Idempotent and safe to run on every
+ * login.
+ */
+async function claimInvitations(userId: string, email: string): Promise<void> {
+  const pending = await prisma.organizationMember.findMany({
+    where: { userId: null, invitedEmail: email, status: "INVITED" },
+    select: { id: true, organizationId: true },
+  });
+  if (pending.length === 0) return;
+  for (const row of pending) {
+    // Skip if the user already has an ACTIVE membership in this org.
+    const existing = await prisma.organizationMember.findFirst({
+      where: { organizationId: row.organizationId, userId },
+    });
+    if (existing) {
+      // Drop the stale invite — the user already has access through another row.
+      await prisma.organizationMember.delete({ where: { id: row.id } }).catch(() => {});
+      continue;
+    }
+    await prisma.organizationMember.update({
+      where: { id: row.id },
+      data: { userId, status: "ACTIVE" },
+    });
+  }
+}
+
 export async function authRoutes(app: FastifyInstance) {
   app.post("/register", async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
@@ -49,6 +78,7 @@ export async function authRoutes(app: FastifyInstance) {
         expiresAt: sessionExpiry(),
       },
     });
+    await claimInvitations(user.id, user.email);
 
     return reply.code(201).send({ user, token });
   });
@@ -79,6 +109,7 @@ export async function authRoutes(app: FastifyInstance) {
         expiresAt: sessionExpiry(),
       },
     });
+    await claimInvitations(user.id, user.email);
 
     return reply.send({
       user: {

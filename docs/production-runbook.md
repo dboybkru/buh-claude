@@ -227,6 +227,27 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 3. `backend` — стартует только после успешного `migrate` (`service_completed_successfully`).
 4. `frontend` — стартует только после `backend healthy`.
 
+### 10.3a. Membership after migration (Sprint 9)
+
+Миграция `20260522220000_sprint9_organization_members` добавляет таблицу
+`OrganizationMember` + два enum (`OrganizationRole`, `OrganizationMemberStatus`)
+и **backfill**-ит OWNER для каждой существующей организации по полю
+`Organization.userId`. После накатки убедитесь:
+
+```sql
+SELECT o.id, o.name, m.role, m.status
+FROM "Organization" o
+LEFT JOIN "OrganizationMember" m ON m."organizationId" = o.id AND m.role = 'OWNER' AND m.status = 'ACTIVE'
+WHERE m.id IS NULL;
+```
+
+Запрос должен вернуть 0 строк. Если есть org без OWNER, восстановите:
+
+```sql
+INSERT INTO "OrganizationMember" (id, "organizationId", "userId", role, status, "createdAt", "updatedAt")
+VALUES (gen_random_uuid(), '<orgId>', '<userId>', 'OWNER', 'ACTIVE', NOW(), NOW());
+```
+
 ### 10.4. Опциональный seed демо-данных
 
 В production обычно **не выполняется**. Если хотите наполнить чистую БД

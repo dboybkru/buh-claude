@@ -1,6 +1,7 @@
 // Эндпойнты для загрузки/удаления/получения изображений организации:
 // логотип, печать, подпись. MVP — локальный диск backend/uploads/<userId>/...
-// Все ручки требуют JWT и проверяют принадлежность файла пользователю.
+// Все ручки требуют JWT. Sprint 9: upload/delete only ADMIN+, download for
+// any ACTIVE member of the organization.
 
 import type { FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
@@ -15,14 +16,9 @@ import {
   MAX_FILE_BYTES,
   type AssetKind,
 } from "../lib/uploads.js";
+import { getAccessibleUserIds, requireOrgAccess } from "../lib/org-access.js";
 
 const kindSchema = z.enum(["logo", "stamp", "signature"]);
-
-async function ensureOrgOwnership(userId: string, organizationId: string) {
-  const org = await prisma.organization.findFirst({ where: { id: organizationId, userId } });
-  if (!org) throw Errors.notFound("Организация");
-  return org;
-}
 
 export async function filesRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: MAX_FILE_BYTES } });
@@ -35,14 +31,18 @@ export async function filesRoutes(app: FastifyInstance) {
       .object({ organizationId: z.string().uuid(), kind: kindSchema })
       .parse(request.params);
     const userId = request.user.sub;
-    const org = await ensureOrgOwnership(userId, organizationId);
+    await requireOrgAccess(prisma, userId, organizationId, "files:upload");
+    const org = await prisma.organization.findUnique({ where: { id: organizationId } });
+    if (!org) throw Errors.notFound("Организация");
 
     const part = await request.file();
     if (!part) throw Errors.validation("Файл не загружен");
 
     const buffer = await part.toBuffer();
+    // Files live under the organization OWNER's userId so members can find
+    // them via the same path the legacy code expects.
     const saved = await saveOrgAsset({
-      userId,
+      userId: org.userId,
       organizationId,
       kind: kind as AssetKind,
       filename: part.filename,
@@ -50,9 +50,8 @@ export async function filesRoutes(app: FastifyInstance) {
       buffer,
     });
 
-    // Удаляем предыдущий файл, если был
     const previous = org[kind as "logo" | "stamp" | "signature"];
-    if (previous) await deleteAsset(userId, previous);
+    if (previous) await deleteAsset(org.userId, previous);
 
     const updated = await prisma.organization.update({
       where: { id: organizationId },
@@ -68,16 +67,17 @@ export async function filesRoutes(app: FastifyInstance) {
     });
   });
 
-  // DELETE /api/v1/files/organizations/:orgId/:kind — удаляем файл и обнуляем поле
   app.delete("/organizations/:organizationId/:kind", async (request) => {
     const { organizationId, kind } = z
       .object({ organizationId: z.string().uuid(), kind: kindSchema })
       .parse(request.params);
     const userId = request.user.sub;
-    const org = await ensureOrgOwnership(userId, organizationId);
+    await requireOrgAccess(prisma, userId, organizationId, "files:delete");
+    const org = await prisma.organization.findUnique({ where: { id: organizationId } });
+    if (!org) throw Errors.notFound("Организация");
 
     const previous = org[kind as "logo" | "stamp" | "signature"];
-    if (previous) await deleteAsset(userId, previous);
+    if (previous) await deleteAsset(org.userId, previous);
     await prisma.organization.update({
       where: { id: organizationId },
       data: { [kind]: null },
@@ -85,19 +85,21 @@ export async function filesRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // GET /api/v1/files/* — отдаёт бинарник, если файл принадлежит текущему пользователю.
-  // Путь — относительный (<userId>/<orgId>/<filename>).
+  // GET /api/v1/files/* — отдаёт бинарник, если файл лежит у owner-а
+  // организации, в которой вызывающий — ACTIVE member.
   app.get("/*", async (request, reply) => {
     const userId = request.user.sub;
-    // Fastify wildcard кладёт остаток в params["*"]
     const wild = (request.params as { "*"?: string })["*"];
     if (!wild) throw Errors.notFound("Файл");
     const relativePath = wild.replace(/^\/+/, "");
-    // Дополнительная проверка: файл должен начинаться с userId/
-    if (!relativePath.startsWith(`${userId}/`)) {
+    // Sprint 9: the path starts with the owner's userId. Verify the caller
+    // is an active member of one of that owner's organizations.
+    const accessibleUserIds = await getAccessibleUserIds(prisma, userId);
+    const fileOwner = relativePath.split("/")[0];
+    if (!fileOwner || !accessibleUserIds.includes(fileOwner)) {
       throw Errors.forbidden("Доступ к чужим файлам запрещён");
     }
-    const data = await readAsset(userId, relativePath);
+    const data = await readAsset(fileOwner, relativePath);
     if (!data) throw Errors.notFound("Файл");
     reply.header("Content-Type", mimeTypeFor(relativePath));
     reply.header("Cache-Control", "private, max-age=60");

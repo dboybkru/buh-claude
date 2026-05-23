@@ -44,6 +44,7 @@ export async function resetDb(): Promise<void> {
       "ReconciliationAct", "Contract", "ContractTemplate", "BankAccount",
       "Nomenclature", "Counterparty", "DocumentNumbering",
       "AiAuditLog", "AiActionPlan", "AiSettings",
+      "OrganizationMember",
       "Organization", "UserSession", "User"
     RESTART IDENTITY CASCADE;
   `);
@@ -88,6 +89,28 @@ export async function createOrganization(token: string, overrides: Record<string
   });
   if (r.statusCode !== 201) throw new Error(`createOrganization failed: ${r.statusCode} ${r.body}`);
   return { id: r.json().id };
+}
+
+/** Sprint 9: add a member to an organization with a specific role. */
+export async function addMember(params: {
+  organizationId: string;
+  userId: string;
+  role: "OWNER" | "ADMIN" | "ACCOUNTANT" | "VIEWER";
+  status?: "ACTIVE" | "INVITED" | "DISABLED";
+}): Promise<{ id: string }> {
+  const p = await getTestPrisma();
+  const created = await p.organizationMember.upsert({
+    where: { organizationId_userId: { organizationId: params.organizationId, userId: params.userId } },
+    update: { role: params.role, status: params.status ?? "ACTIVE" },
+    create: {
+      organizationId: params.organizationId,
+      userId: params.userId,
+      role: params.role,
+      status: params.status ?? "ACTIVE",
+    },
+    select: { id: true },
+  });
+  return created;
 }
 
 /** Создаёт контрагента, возвращает id. */

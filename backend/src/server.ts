@@ -23,6 +23,7 @@ import { bankImportRoutes } from "./routes/bank-import.js";
 import { filesRoutes } from "./routes/files.js";
 import { contractTemplatesRoutes } from "./routes/contract-templates.js";
 import { healthRoutes } from "./routes/health.js";
+import { membersRoutes } from "./routes/members.js";
 import { ApiError, normalizeErrorPayload } from "./lib/api-error.js";
 import { ZodError } from "zod";
 import crypto from "node:crypto";
@@ -136,6 +137,8 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(authRoutes, { prefix: "/api/v1/auth" });
   await app.register(organizationsRoutes, { prefix: "/api/v1/organizations" });
+  // Sprint 9: RBAC — members CRUD nested under each organization.
+  await app.register(membersRoutes, { prefix: "/api/v1/organizations/:organizationId/members" });
   await app.register(counterpartiesRoutes, { prefix: "/api/v1/counterparties" });
   await app.register(nomenclatureRoutes, { prefix: "/api/v1/nomenclature" });
   await app.register(contractsRoutes, { prefix: "/api/v1/contracts" });

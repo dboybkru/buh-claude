@@ -64,10 +64,11 @@ async function main() {
   });
   console.log(`  • пользователь ${user.email}`);
 
-  // 3. Организация (ООО Альфа) с банковским счётом
+  // 3. Организация (ООО Альфа) с банковским счётом + OWNER membership (Sprint 9)
   const org = await prisma.organization.create({
     data: {
       userId: user.id,
+      members: { create: [{ userId: user.id, role: "OWNER", status: "ACTIVE" }] },
       type: "OOO",
       name: "ООО «Альфа»",
       fullName: `Общество с ограниченной ответственностью "Альфа"`,

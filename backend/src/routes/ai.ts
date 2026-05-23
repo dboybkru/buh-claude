@@ -27,6 +27,26 @@ import { loadAiContext, formatContextForPrompt, type AiContextScope } from "../l
 import { parseActionPlan, selectApprovedActions } from "../lib/ai/action-plan.js";
 import { executeAction, asFailedAction, toAppliedAction } from "../lib/ai/executor.js";
 import type { ActionPlan, ConfirmResult, AppliedAction, FailedAction, SkippedAction } from "../lib/ai/schemas.js";
+import { requireOrgAccess } from "../lib/org-access.js";
+import { hasPermission, type Permission } from "../lib/permissions.js";
+
+// Sprint 9: AiSettings is user-scoped (per provider/api-key). Gate writes
+// behind ai:settings; gate /chat / /confirm behind ai:chat / ai:confirm
+// — at least one organization the caller is a member of must grant it.
+async function assertCanSettings(userId: string, perm: Permission): Promise<void> {
+  const rows = await prisma.organizationMember.findMany({
+    where: { userId, status: "ACTIVE" },
+    select: { role: true },
+  });
+  // Bootstrap: a user with no memberships is allowed (they have no org to
+  // violate RBAC against — they're just configuring their own AI before
+  // creating their first organization).
+  if (rows.length === 0) return;
+  for (const r of rows) {
+    if (hasPermission(r.role, perm)) return;
+  }
+  throw Errors.forbidden(`Недостаточно прав (нужно: ${perm})`);
+}
 
 /* ---------- schemas ---------- */
 
@@ -124,6 +144,9 @@ export async function aiRoutes(app: FastifyInstance) {
   });
 
   app.put("/settings", async (request) => {
+    // Sprint 9: AI settings are per-user but conceptually administrative.
+    // Require ai:settings (OWNER or ADMIN) in at least one organization.
+    await assertCanSettings(request.user.sub, "ai:settings");
     const parsed = settingsSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные настройки", parsed.error.flatten());
     const data = parsed.data;
@@ -198,6 +221,11 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!parsed.success) throw Errors.validation("Невалидные параметры", parsed.error.flatten());
     const { message, organizationId, scope } = parsed.data;
     const userId = request.user.sub;
+    if (organizationId) {
+      await requireOrgAccess(prisma, userId, organizationId, "ai:chat");
+    } else {
+      await assertCanSettings(userId, "ai:chat");
+    }
 
     const loaded = await loadAiConfig(userId);
     if (!loaded) throw Errors.validation("AI не настроен — откройте /ai/settings");
@@ -306,6 +334,13 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!planRow) throw Errors.notFound("ActionPlan");
     if (planRow.status !== "DRAFT") {
       throw Errors.conflict(`ActionPlan уже в статусе ${planRow.status} — повторное применение запрещено`);
+    }
+    // Sprint 9: confirm requires ai:confirm; if plan is org-scoped, check
+    // the caller's role in that org. Otherwise fall back to "any org".
+    if (planRow.organizationId) {
+      await requireOrgAccess(prisma, userId, planRow.organizationId, "ai:confirm");
+    } else {
+      await assertCanSettings(userId, "ai:confirm");
     }
     if (planRow.expiresAt && planRow.expiresAt < new Date()) {
       await prisma.aiActionPlan.update({ where: { id }, data: { status: "EXPIRED" } });

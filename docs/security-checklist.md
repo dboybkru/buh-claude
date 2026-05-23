@@ -103,7 +103,29 @@
 | 10.2 | Stack trace в ErrorBoundary показывается ТОЛЬКО в DEV (`import.meta.env.DEV`) | ✅ | `ErrorBoundary.tsx` |
 | 10.3 | Code splitting через `React.lazy` — главный chunk ~410 KB (с 716 KB) | ✅ | Sprint 7 в `App.tsx` |
 
-## 11. Docker / deployment (Sprint 8)
+## 11. RBAC / membership (Sprint 9)
+
+| # | Проверка | Статус | Где |
+|---|---|---|---|
+| 11.1 | Каждая организация имеет минимум одного ACTIVE OWNER (backfill для existing) | ✅ | `prisma/migrations/20260522220000_sprint9_organization_members` |
+| 11.2 | Создатель организации авто-получает OWNER membership (в одной транзакции с create) | ✅ | `routes/organizations.ts` |
+| 11.3 | Last-owner guard: PATCH/DELETE не могут оставить org без активного OWNER | ✅ | `routes/members.ts:activeOwnerCount` |
+| 11.4 | ADMIN не может назначить OWNER / демоушнуть OWNER / удалить OWNER | ✅ | `canManageMember`, `canInviteRole` |
+| 11.5 | ACCOUNTANT / VIEWER не могут приглашать / управлять членами | ✅ | `permissions.ts:PERMISSION_MIN_ROLE.members:*` |
+| 11.6 | VIEWER не может писать данные (data:write), создавать платежи, импортировать банк, подтверждать AI | ✅ | permission matrix |
+| 11.7 | Cross-org access возвращает 404 (privacy obfuscation), не 403 | ✅ | `org-access.ts:requireOrgAccess` |
+| 11.8 | INVITED row автоматически принимается при register/login с тем же email | ✅ | `routes/auth.ts:claimInvitations` |
+| 11.9 | Files upload/delete требует ADMIN+; download для любого ACTIVE member | ✅ | `routes/files.ts` |
+| 11.10 | AI settings требует ADMIN+; chat/confirm требуют ACCOUNTANT+ | ✅ | `routes/ai.ts:assertCanSettings` |
+| 11.11 | Bank import требует ACCOUNTANT+ | ✅ | `routes/bank-import.ts` |
+| 11.12 | Permission unit-tests покрывают всю матрицу (OWNER > ADMIN > ACCOUNTANT > VIEWER) | ✅ | `lib/permissions.test.ts` |
+| 11.13 | Integration-тесты проверяют: invite, last-owner, ADMIN не демоушит OWNER, VIEWER не пишет invoice/files | ✅ | `test/integration/members.test.ts` |
+| 11.14 | Email delivery для приглашений | ❌ | TODO — пока MVP claims invite при логине |
+| 11.15 | Row-level audit для каждой write-операции (кто менял что) | ❌ | TODO — только AI-actions покрыты |
+| 11.16 | Counterparty / Nomenclature / ContractTemplate без orgId column — переходный compromise (filter by accessibleUserIds) | ⚠ | будущая миграция должна добавить orgId на справочники |
+| 11.17 | Sprint 9A debt: `acts`, `upds`, `waybills`, `contracts`, `reconciliations`, `contract-templates` ещё используют `userId` filter и не переведены на `requireOrgAccess` + permission gates | ⚠ | Sprint 9B — мигрировать эти routes на полноценный RBAC |
+
+## 12. Docker / deployment (Sprint 8)
 
 | # | Проверка | Статус | Где |
 |---|---|---|---|

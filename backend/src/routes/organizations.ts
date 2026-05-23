@@ -10,6 +10,8 @@ import {
   parseSort,
   paginate,
 } from "../lib/validators.js";
+import { Errors } from "../lib/api-error.js";
+import { getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
 
 const orgTypeEnum = z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]);
 const taxSystemEnum = z.enum(["OSN", "USN", "USN_INCOME", "AUSN", "ENVD", "PSN", "NPD"]);
@@ -43,7 +45,6 @@ const orgBaseShape = {
   vatMode: vatModeEnum.default("GENERAL"),
   taxSystem: taxSystemEnum.default("OSN"),
   isDefault: z.boolean().default(false),
-  // Настройки печатных форм (Sprint 5)
   printShowLogo: z.boolean().optional(),
   printShowStamp: z.boolean().optional(),
   printShowSignature: z.boolean().optional(),
@@ -61,14 +62,12 @@ const orgBaseShape = {
 };
 
 const createSchema = z.object(orgBaseShape).superRefine((data, ctx) => {
-  // КПП обязателен для юрлиц, отсутствует у ИП
   if (data.type !== "IP" && !data.kpp) {
     ctx.addIssue({ code: "custom", path: ["kpp"], message: "КПП обязателен для юрлица" });
   }
   if (data.type === "IP" && data.kpp) {
     ctx.addIssue({ code: "custom", path: ["kpp"], message: "У ИП не должно быть КПП" });
   }
-  // ИНН: 10 — юрлицо, 12 — ИП
   if (data.type === "IP" && data.inn.length !== 12) {
     ctx.addIssue({ code: "custom", path: ["inn"], message: "ИНН ИП должен содержать 12 цифр" });
   }
@@ -82,11 +81,13 @@ const updateSchema = z.object(orgBaseShape).partial();
 export async function organizationsRoutes(app: FastifyInstance) {
   app.addHook("onRequest", app.authenticate);
 
+  // List: every organization the caller is an ACTIVE member of.
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
     const userId = request.user.sub;
+    const orgIds = await getUserOrgIds(prisma, userId);
     const where: Prisma.OrganizationWhereInput = {
-      userId,
+      id: { in: orgIds },
       ...(q.q
         ? {
             OR: [
@@ -111,17 +112,18 @@ export async function organizationsRoutes(app: FastifyInstance) {
     return paginate(items, total, q.page, q.pageSize);
   });
 
-  app.get("/:id", async (request, reply) => {
-    const userId = request.user.sub;
+  app.get("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const org = await prisma.organization.findFirst({
-      where: { id, userId },
+    await requireOrgAccess(prisma, request.user.sub, id, "org:read");
+    const org = await prisma.organization.findUnique({
+      where: { id },
       include: { bankAccounts: true },
     });
-    if (!org) return reply.code(404).send({ error: "NotFound" });
+    if (!org) throw Errors.notFound("Организация");
     return org;
   });
 
+  // Create: the caller becomes OWNER of the new organization in one tx.
   app.post("/", async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -131,12 +133,22 @@ export async function organizationsRoutes(app: FastifyInstance) {
     const data = parsed.data;
 
     try {
-      // Если новая организация isDefault — снять флаг у остальных
       const created = await prisma.$transaction(async (tx) => {
         if (data.isDefault) {
           await tx.organization.updateMany({ where: { userId, isDefault: true }, data: { isDefault: false } });
         }
-        return tx.organization.create({ data: { ...data, userId } });
+        const org = await tx.organization.create({ data: { ...data, userId } });
+        await tx.organizationMember.create({
+          data: {
+            organizationId: org.id,
+            userId,
+            role: "OWNER",
+            status: "ACTIVE",
+          },
+        });
+        // If there's a pending INVITED row by email for this user, accept it
+        // is not relevant here (we just created a new org).
+        return org;
       });
       return reply.code(201).send(created);
     } catch (err) {
@@ -153,17 +165,21 @@ export async function organizationsRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     }
-    const userId = request.user.sub;
-    const existing = await prisma.organization.findFirst({ where: { id, userId } });
-    if (!existing) return reply.code(404).send({ error: "NotFound" });
+    // OWNER/ADMIN can edit org core fields; print-* fields are part of update
+    // payload but only admin+ can change them — same gate.
+    await requireOrgAccess(prisma, request.user.sub, id, "print:settings");
 
     try {
       const updated = await prisma.$transaction(async (tx) => {
         if (parsed.data.isDefault) {
-          await tx.organization.updateMany({
-            where: { userId, isDefault: true, NOT: { id } },
-            data: { isDefault: false },
-          });
+          // Toggle isDefault flag scoped to the OWNER's other organizations.
+          const org = await tx.organization.findUnique({ where: { id }, select: { userId: true } });
+          if (org) {
+            await tx.organization.updateMany({
+              where: { userId: org.userId, isDefault: true, NOT: { id } },
+              data: { isDefault: false },
+            });
+          }
         }
         return tx.organization.update({ where: { id }, data: parsed.data });
       });
@@ -178,9 +194,7 @@ export async function organizationsRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const userId = request.user.sub;
-    const existing = await prisma.organization.findFirst({ where: { id, userId } });
-    if (!existing) return reply.code(404).send({ error: "NotFound" });
+    await requireOrgAccess(prisma, request.user.sub, id, "org:delete");
     try {
       await prisma.organization.delete({ where: { id } });
       return { ok: true };

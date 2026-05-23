@@ -5,6 +5,8 @@ import { prisma } from "../lib/prisma.js";
 import { innSchema, kppSchema, ogrnSchema, paginationSchema, parseSort, paginate } from "../lib/validators.js";
 import { buildCounterpartyStatement } from "../lib/counterparty-statement.js";
 import { Errors } from "../lib/api-error.js";
+import { assertCanWriteData, getAccessibleUserIds, getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
+import { hasPermission } from "../lib/permissions.js";
 
 const orgTypeEnum = z.enum(["OOO", "AO", "PAO", "ZAO", "OAO", "IP"]);
 
@@ -54,9 +56,12 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
 
   app.get("/", async (request) => {
     const q = paginationSchema.parse(request.query);
-    const userId = request.user.sub;
+    // Sprint 9: scope by every user whose orgs the caller is a member of.
+    // Counterparty doesn't (yet) have an organizationId column, so we filter
+    // by creator userId. See lib/org-access.ts:getAccessibleUserIds.
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
     const where: Prisma.CounterpartyWhereInput = {
-      userId,
+      userId: { in: userIds },
       ...(q.q
         ? {
             OR: [
@@ -82,7 +87,8 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const cp = await prisma.counterparty.findFirst({ where: { id, userId: request.user.sub } });
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const cp = await prisma.counterparty.findFirst({ where: { id, userId: { in: userIds } } });
     if (!cp) return reply.code(404).send({ error: "NotFound" });
     return cp;
   });
@@ -93,9 +99,20 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
     const { organizationId } = z
       .object({ organizationId: z.string().uuid().optional() })
       .parse(request.query);
+    if (organizationId) {
+      await requireOrgAccess(prisma, request.user.sub, organizationId, "data:read");
+    }
+    // Statement aggregates documents owned by the legacy "user" — find the
+    // right userId from accessible set so accountants see their owner's data.
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const cp = await prisma.counterparty.findFirst({
+      where: { id, userId: { in: userIds } },
+      select: { userId: true },
+    });
+    if (!cp) throw Errors.notFound("Контрагент");
     try {
       return await buildCounterpartyStatement({
-        userId: request.user.sub,
+        userId: cp.userId,
         counterpartyId: id,
         organizationId: organizationId ?? null,
       });
@@ -110,6 +127,10 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
     const userId = request.user.sub;
     const d = parsed.data;
+
+    // Sprint 9: must have data:write in at least one org. We don't bind CP
+    // to a specific org yet — but VIEWERs across all their orgs are blocked.
+    await assertCanWriteData(userId);
 
     // Запрет: контрагент не может совпадать с собственной организацией пользователя.
     // Для юрлица сверяем (inn, kpp) — два юрлица с разными КПП считаются разными.
@@ -145,7 +166,9 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "ValidationError", details: parsed.error.flatten() });
-    const existing = await prisma.counterparty.findFirst({ where: { id, userId: request.user.sub } });
+    await assertCanWriteData(request.user.sub);
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const existing = await prisma.counterparty.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
     try {
       const updated = await prisma.counterparty.update({
@@ -163,7 +186,9 @@ export async function counterpartiesRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const existing = await prisma.counterparty.findFirst({ where: { id, userId: request.user.sub } });
+    await assertCanWriteData(request.user.sub);
+    const userIds = await getAccessibleUserIds(prisma, request.user.sub);
+    const existing = await prisma.counterparty.findFirst({ where: { id, userId: { in: userIds } } });
     if (!existing) return reply.code(404).send({ error: "NotFound" });
     try {
       await prisma.counterparty.delete({ where: { id } });

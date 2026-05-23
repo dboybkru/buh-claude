@@ -11,6 +11,7 @@ import {
   validateAllocations,
   round2,
 } from "../lib/payments-service.js";
+import { getUserOrgIds, requireOrgAccess } from "../lib/org-access.js";
 
 const directionEnum = z.enum(["IN", "OUT"]);
 const methodEnum = z.enum(["BANK", "CASH", "CARD", "OTHER"]);
@@ -112,10 +113,12 @@ export async function paymentsRoutes(app: FastifyInstance) {
       })
       .parse(request.query);
 
+    const orgIds = await getUserOrgIds(prisma, userId);
     const where: Prisma.PaymentWhereInput = {
-      userId,
+      organizationId: extraFilters.organizationId
+        ? { in: orgIds.includes(extraFilters.organizationId) ? [extraFilters.organizationId] : [] }
+        : { in: orgIds },
       ...(extraFilters.counterpartyId ? { counterpartyId: extraFilters.counterpartyId } : {}),
-      ...(extraFilters.organizationId ? { organizationId: extraFilters.organizationId } : {}),
       ...(extraFilters.direction ? { direction: extraFilters.direction } : {}),
       ...(extraFilters.from || extraFilters.to
         ? {
@@ -164,8 +167,9 @@ export async function paymentsRoutes(app: FastifyInstance) {
 
   app.get("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
     const p = await prisma.payment.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id, organizationId: { in: orgIds } },
       include: {
         organization: true,
         counterparty: true,
@@ -186,8 +190,15 @@ export async function paymentsRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const data = parsed.data;
 
+    await requireOrgAccess(prisma, userId, data.organizationId, "payments:write");
+    const orgRow = await prisma.organization.findUnique({
+      where: { id: data.organizationId },
+      select: { userId: true },
+    });
+    const ownerUserId = orgRow?.userId ?? userId;
+
     const result = await prisma.$transaction((tx) =>
-      createPaymentInTx(tx, userId, {
+      createPaymentInTx(tx, ownerUserId, {
         organizationId: data.organizationId,
         counterpartyId: data.counterpartyId ?? null,
         bankAccountId: data.bankAccountId ?? null,
@@ -211,10 +222,11 @@ export async function paymentsRoutes(app: FastifyInstance) {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) throw Errors.validation("Невалидные поля платежа", parsed.error.flatten());
     const existing = await prisma.payment.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id },
       include: { allocations: true },
     });
     if (!existing) throw Errors.notFound("Платёж");
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "payments:write");
     const data = parsed.data;
 
     // Что меняется: если allocations/invoiceId переданы — заменяем. Иначе сохраняем как есть и при изменении
@@ -273,7 +285,7 @@ export async function paymentsRoutes(app: FastifyInstance) {
           await tx.paymentAllocation.update({ where: { id: alloc.id }, data: { amount: data.amount } });
           // Re-валидация: не должны переплатить
           await validateAllocations(tx, {
-            userId: request.user.sub,
+            userId: existing.userId,
             organizationId: newOrgId,
             counterpartyId: newCpId ?? null,
             direction: newDirection,
@@ -296,10 +308,11 @@ export async function paymentsRoutes(app: FastifyInstance) {
   app.delete("/:id", async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const existing = await prisma.payment.findFirst({
-      where: { id, userId: request.user.sub },
+      where: { id },
       include: { allocations: true },
     });
     if (!existing) throw Errors.notFound("Платёж");
+    await requireOrgAccess(prisma, request.user.sub, existing.organizationId, "payments:write");
 
     await prisma.$transaction(async (tx) => {
       const affected = Array.from(new Set(existing.allocations.map((a) => a.invoiceId)));
@@ -312,7 +325,8 @@ export async function paymentsRoutes(app: FastifyInstance) {
   // Платежи по конкретному счёту
   app.get("/by-invoice/:invoiceId", async (request) => {
     const { invoiceId } = z.object({ invoiceId: z.string().uuid() }).parse(request.params);
-    const invoice = await prisma.invoice.findFirst({ where: { id: invoiceId, userId: request.user.sub } });
+    const orgIds = await getUserOrgIds(prisma, request.user.sub);
+    const invoice = await prisma.invoice.findFirst({ where: { id: invoiceId, organizationId: { in: orgIds } } });
     if (!invoice) throw Errors.notFound("Счёт");
     const allocations = await prisma.paymentAllocation.findMany({
       where: { invoiceId },
